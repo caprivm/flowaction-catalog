@@ -100,8 +100,9 @@ jobs:
             *) fail "Unsupported HTTP method" ;;
           esac
           [[ "$FLOWACTION_URL" =~ ^https://[^[:space:]]+$ ]] || fail "The URL must be an absolute https:// URL"
-          [[ "$FLOWACTION_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] && (( FLOWACTION_TIMEOUT_SECONDS >= 1 && FLOWACTION_TIMEOUT_SECONDS <= 300 )) \
-            || fail "timeout_seconds must be between 1 and 300"
+          if ! [[ "$FLOWACTION_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || (( FLOWACTION_TIMEOUT_SECONDS < 1 || FLOWACTION_TIMEOUT_SECONDS > 300 )); then
+            fail "timeout_seconds must be between 1 and 300"
+          fi
           [[ "$FLOWACTION_AUTH_HEADER" =~ ^[A-Za-z0-9-]{1,100}$ ]] || fail "Invalid auth_header"
           [[ "$FLOWACTION_AUTH_SCHEME" =~ ^[A-Za-z0-9-]{0,40}$ ]] || fail "Invalid auth_scheme"
           if [[ "$FLOWACTION_METHOD" == HEAD && -n "$FLOWACTION_BODY" ]]; then

@@ -57,9 +57,9 @@ jobs:
 
           [[ "$FLOWACTION_TASK_ID" =~ ^[A-Za-z0-9_-]{1,80}$ ]] || fail "Invalid task_id"
           case "$FLOWACTION_LANGUAGE" in
-            python) extension=py ;;
-            javascript) extension=js ;;
-            bash) extension=sh ;;
+            python) extension="py" ;;
+            javascript) extension="js" ;;
+            bash) extension="sh" ;;
             *) fail "Unsupported language" ;;
           esac
           [[ "$FLOWACTION_SCRIPT_PATH" =~ ^\.flowaction/scripts/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,80}\.${extension}$ ]] \
