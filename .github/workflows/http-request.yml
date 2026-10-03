@@ -1,0 +1,178 @@
+# FlowAction catalog block: HTTP request (BPMN service task, REST connector).
+#
+# Reusable workflow called by FlowAction segments from this repository, pinned by commit SHA.
+# Its manifest is .flowaction/blocks/http-request/block.json. It sends one REST
+# request and stores the response as the task output. Every caller-provided value reaches the shell
+# through `env:`; none is interpolated into a `run:` command.
+name: FlowAction catalog / HTTP request
+
+on:
+  workflow_call:
+    inputs:
+      task_id:
+        description: BPMN task identifier; names the output file and artifact
+        required: true
+        type: string
+      method:
+        description: HTTP method (GET, POST, PUT, PATCH, DELETE, HEAD or OPTIONS)
+        required: true
+        type: string
+      url:
+        description: Absolute https:// URL, including any query string
+        required: true
+        type: string
+      headers:
+        description: JSON object of header names to string values
+        required: false
+        type: string
+        default: "{}"
+      body:
+        description: Raw request body; send JSON with a Content-Type header
+        required: false
+        type: string
+        default: ""
+      auth_header:
+        description: Header that carries the auth_token secret
+        required: false
+        type: string
+        default: Authorization
+      auth_scheme:
+        description: Prefix for the auth_token value, such as Bearer; empty sends the raw token
+        required: false
+        type: string
+        default: Bearer
+      fail_on_http_error:
+        description: Fail the task when the response status is 400 or higher
+        required: false
+        type: boolean
+        default: true
+      timeout_seconds:
+        description: Maximum time for the whole request
+        required: false
+        type: number
+        default: 30
+      runs_on:
+        description: Runner label
+        required: false
+        type: string
+        default: ubuntu-latest
+    secrets:
+      auth_token:
+        description: Optional credential, mapped by the caller from a GitHub secret name
+        required: false
+    outputs:
+      status:
+        description: HTTP response status code
+        value: ${{ jobs.request.outputs.status }}
+
+permissions:
+  contents: read
+
+jobs:
+  request:
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 10
+    outputs:
+      status: ${{ steps.send.outputs.status }}
+    steps:
+      - name: Send request
+        id: send
+        env:
+          FLOWACTION_TASK_ID: ${{ inputs.task_id }}
+          FLOWACTION_METHOD: ${{ inputs.method }}
+          FLOWACTION_URL: ${{ inputs.url }}
+          FLOWACTION_HEADERS: ${{ inputs.headers }}
+          FLOWACTION_BODY: ${{ inputs.body }}
+          FLOWACTION_AUTH_HEADER: ${{ inputs.auth_header }}
+          FLOWACTION_AUTH_SCHEME: ${{ inputs.auth_scheme }}
+          FLOWACTION_AUTH_TOKEN: ${{ secrets.auth_token }}
+          FLOWACTION_FAIL_ON_HTTP_ERROR: ${{ inputs.fail_on_http_error }}
+          FLOWACTION_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+          FLOWACTION_WORK_DIR: ${{ runner.temp }}/flowaction-http
+          FLOWACTION_OUTPUT_DIR: ${{ runner.temp }}/flowaction-output
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$FLOWACTION_TASK_ID" =~ ^[A-Za-z0-9_-]{1,80}$ ]] || fail "Invalid task_id"
+          case "$FLOWACTION_METHOD" in
+            GET | POST | PUT | PATCH | DELETE | HEAD | OPTIONS) ;;
+            *) fail "Unsupported HTTP method" ;;
+          esac
+          [[ "$FLOWACTION_URL" =~ ^https://[^[:space:]]+$ ]] || fail "The URL must be an absolute https:// URL"
+          if ! [[ "$FLOWACTION_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || (( FLOWACTION_TIMEOUT_SECONDS < 1 || FLOWACTION_TIMEOUT_SECONDS > 300 )); then
+            fail "timeout_seconds must be between 1 and 300"
+          fi
+          [[ "$FLOWACTION_AUTH_HEADER" =~ ^[A-Za-z0-9-]{1,100}$ ]] || fail "Invalid auth_header"
+          [[ "$FLOWACTION_AUTH_SCHEME" =~ ^[A-Za-z0-9-]{0,40}$ ]] || fail "Invalid auth_scheme"
+          if [[ "$FLOWACTION_METHOD" == HEAD && -n "$FLOWACTION_BODY" ]]; then
+            fail "HEAD requests cannot carry a body"
+          fi
+          jq -e 'type == "object" and all(to_entries[];
+            (.key | test("^[A-Za-z0-9-]{1,100}$")) and (.value | type == "string" and (test("[\r\n]") | not)))' \
+            <<<"$FLOWACTION_HEADERS" >/dev/null || fail "headers must be a JSON object of header names to single-line strings"
+
+          mkdir -p "$FLOWACTION_WORK_DIR" "$FLOWACTION_OUTPUT_DIR"
+          headers_file="$FLOWACTION_WORK_DIR/request-headers"
+          jq -r 'to_entries[] | "\(.key): \(.value)"' <<<"$FLOWACTION_HEADERS" > "$headers_file"
+          if [[ -n "$FLOWACTION_AUTH_TOKEN" ]]; then
+            # Kept in a file so the credential never appears in the process list.
+            if [[ -n "$FLOWACTION_AUTH_SCHEME" ]]; then
+              printf '%s: %s %s\n' "$FLOWACTION_AUTH_HEADER" "$FLOWACTION_AUTH_SCHEME" "$FLOWACTION_AUTH_TOKEN" >> "$headers_file"
+            else
+              printf '%s: %s\n' "$FLOWACTION_AUTH_HEADER" "$FLOWACTION_AUTH_TOKEN" >> "$headers_file"
+            fi
+          fi
+
+          # HEAD with --head writes headers to --output, so its (empty) body goes elsewhere.
+          response_body="$FLOWACTION_WORK_DIR/response-body"
+          : > "$response_body"
+          [[ "$FLOWACTION_METHOD" == HEAD ]] && response_body=/dev/null
+          args=(
+            --silent --show-error
+            --proto '=https'
+            --max-time "$FLOWACTION_TIMEOUT_SECONDS"
+            --max-filesize 10485760
+            --request "$FLOWACTION_METHOD"
+            --header "@$headers_file"
+            --dump-header "$FLOWACTION_WORK_DIR/response-headers"
+            --output "$response_body"
+            --write-out '%{http_code}'
+          )
+          if [[ "$FLOWACTION_METHOD" == HEAD ]]; then
+            args+=(--head)
+          fi
+          if [[ -n "$FLOWACTION_BODY" ]]; then
+            printf '%s' "$FLOWACTION_BODY" > "$FLOWACTION_WORK_DIR/request-body"
+            args+=(--data-binary "@$FLOWACTION_WORK_DIR/request-body")
+          fi
+
+          status="$(curl "${args[@]}" -- "$FLOWACTION_URL")" || fail "The request could not be completed"
+
+          # Output contract shared with script tasks: one JSON object per task.
+          jq -n \
+            --argjson status "$status" \
+            --rawfile body "$FLOWACTION_WORK_DIR/response-body" \
+            --rawfile rawHeaders "$FLOWACTION_WORK_DIR/response-headers" \
+            '{
+              status: $status,
+              headers: ($rawHeaders | split("\r\n\r\n") | map(select(length > 0)) | last // ""
+                | split("\r\n") | map(select(test("^[^:]+: ")))
+                | map(capture("^(?<k>[^:]+): (?<v>.*)$")) | map({(.k | ascii_downcase): .v}) | add // {}),
+              body: (try ($body | fromjson) catch $body)
+            }' > "$FLOWACTION_OUTPUT_DIR/$FLOWACTION_TASK_ID.json"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "HTTP $FLOWACTION_METHOD responded with status $status"
+
+          if [[ "$FLOWACTION_FAIL_ON_HTTP_ERROR" == true ]] && (( status >= 400 )); then
+            fail "The request failed with HTTP status $status"
+          fi
+
+      - name: Upload task output
+        if: ${{ always() && steps.send.outputs.status != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flowaction-output-${{ inputs.task_id }}
+          path: ${{ runner.temp }}/flowaction-output/
+          if-no-files-found: error
+          retention-days: 1

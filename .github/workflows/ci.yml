@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      # Go modules are verified against the Go checksum database, so the version pins the content.
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Lint workflows
+        run: '"$(go env GOPATH)/bin/actionlint"'
+
+      - name: Validate block manifests and workflows
+        env:
+          WORKFLOW_JSON_DIR: ${{ runner.temp }}/workflow-json
+        run: |
+          mkdir -p "$WORKFLOW_JSON_DIR"
+          for file in .github/workflows/*.yml; do
+            yq -o=json "$file" > "$WORKFLOW_JSON_DIR/$(basename "$file").json"
+          done
+          node scripts/validate.mjs "$WORKFLOW_JSON_DIR"

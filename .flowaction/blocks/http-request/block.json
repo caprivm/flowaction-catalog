@@ -1,0 +1,62 @@
+{
+  "format": "flowaction.block/v1",
+  "id": "http-request",
+  "version": "1.0.0",
+  "label": "HTTP request (REST)",
+  "description": "Calls an https:// endpoint; the response status, headers and body become the task output.",
+  "bpmnType": "bpmn:ServiceTask",
+  "workflow": ".github/workflows/http-request.yml",
+  "inputs": [
+    {
+      "name": "method",
+      "type": "string",
+      "required": true,
+      "label": "Method",
+      "options": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+    },
+    {
+      "name": "url",
+      "type": "string",
+      "required": true,
+      "label": "URL",
+      "description": "Absolute https:// URL, including any query string"
+    },
+    {
+      "name": "headers",
+      "type": "string",
+      "label": "Headers",
+      "description": "JSON object of header names to string values"
+    },
+    { "name": "body", "type": "string", "label": "Body" },
+    {
+      "name": "auth_header",
+      "type": "string",
+      "label": "Auth header",
+      "description": "Header that carries the auth_token secret"
+    },
+    {
+      "name": "auth_scheme",
+      "type": "string",
+      "label": "Auth scheme",
+      "description": "Prefix for the auth_token value, such as Bearer"
+    },
+    {
+      "name": "fail_on_http_error",
+      "type": "boolean",
+      "label": "Fail on HTTP error",
+      "description": "Fail the task when the response status is 400 or higher"
+    },
+    {
+      "name": "timeout_seconds",
+      "type": "number",
+      "label": "Timeout (seconds)"
+    }
+  ],
+  "secrets": [
+    {
+      "name": "auth_token",
+      "description": "Credential, mapped from a GitHub secret name"
+    }
+  ],
+  "outputs": [{ "name": "status", "description": "HTTP response status code" }]
+}
