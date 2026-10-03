@@ -1,0 +1,106 @@
+# FlowAction catalog block: script (BPMN script task).
+#
+# Reusable workflow called by FlowAction segments from this repository, pinned by commit SHA.
+# Its manifest is .flowaction/blocks/script/block.json. It runs one script file that FlowAction
+# committed under `.flowaction/scripts/` in the calling (execution) repository. The script text
+# never appears in this workflow, and every caller-provided value reaches the shell through `env:`.
+name: FlowAction catalog / Script
+
+on:
+  workflow_call:
+    inputs:
+      task_id:
+        description: BPMN task identifier; names the output file and artifact
+        required: true
+        type: string
+      language:
+        description: python, javascript or bash
+        required: true
+        type: string
+      script_path:
+        description: Script file under .flowaction/scripts/<process key>/
+        required: true
+        type: string
+      vars:
+        description: Compact JSON object of process variables
+        required: false
+        type: string
+        default: "{}"
+      timeout_minutes:
+        description: Maximum run time for the script
+        required: false
+        type: number
+        default: 10
+      runs_on:
+        description: Runner label
+        required: false
+        type: string
+        default: ubuntu-latest
+
+permissions:
+  contents: read
+
+jobs:
+  script:
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    steps:
+      - name: Validate inputs
+        env:
+          FLOWACTION_TASK_ID: ${{ inputs.task_id }}
+          FLOWACTION_LANGUAGE: ${{ inputs.language }}
+          FLOWACTION_SCRIPT_PATH: ${{ inputs.script_path }}
+          FLOWACTION_VARS: ${{ inputs.vars }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$FLOWACTION_TASK_ID" =~ ^[A-Za-z0-9_-]{1,80}$ ]] || fail "Invalid task_id"
+          case "$FLOWACTION_LANGUAGE" in
+            python) extension=py ;;
+            javascript) extension=js ;;
+            bash) extension=sh ;;
+            *) fail "Unsupported language" ;;
+          esac
+          [[ "$FLOWACTION_SCRIPT_PATH" =~ ^\.flowaction/scripts/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,80}\.${extension}$ ]] \
+            || fail "script_path must be .flowaction/scripts/<process key>/<task id>.${extension}"
+          jq -e 'type == "object"' <<<"$FLOWACTION_VARS" >/dev/null || fail "vars must be a JSON object"
+
+      - name: Checkout script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: ${{ inputs.script_path }}
+          sparse-checkout-cone-mode: false
+
+      - name: Run script
+        env:
+          FLOWACTION_TASK_ID: ${{ inputs.task_id }}
+          FLOWACTION_LANGUAGE: ${{ inputs.language }}
+          FLOWACTION_SCRIPT_PATH: ${{ inputs.script_path }}
+          FLOWACTION_VARS: ${{ inputs.vars }}
+          FLOWACTION_VARS_FILE: ${{ runner.temp }}/flowaction-vars.json
+          FLOWACTION_OUTPUT_DIR: ${{ runner.temp }}/flowaction-output
+        run: |
+          set -euo pipefail
+          mkdir -p "$FLOWACTION_OUTPUT_DIR"
+          printf '%s' "$FLOWACTION_VARS" > "$FLOWACTION_VARS_FILE"
+          export FLOWACTION_OUTPUT="$FLOWACTION_OUTPUT_DIR/$FLOWACTION_TASK_ID.json"
+          printf '{}' > "$FLOWACTION_OUTPUT"
+          # Not exported to the script: it reads its inputs from the files above.
+          unset FLOWACTION_VARS
+          case "$FLOWACTION_LANGUAGE" in
+            python) python3 "$FLOWACTION_SCRIPT_PATH" ;;
+            javascript) node "$FLOWACTION_SCRIPT_PATH" ;;
+            bash) bash "$FLOWACTION_SCRIPT_PATH" ;;
+          esac
+          jq -e 'type == "object"' "$FLOWACTION_OUTPUT" >/dev/null \
+            || { echo "::error::The script must write a JSON object to FLOWACTION_OUTPUT"; exit 1; }
+
+      - name: Upload task output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flowaction-output-${{ inputs.task_id }}
+          path: ${{ runner.temp }}/flowaction-output/
+          if-no-files-found: error
+          retention-days: 1

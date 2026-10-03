@@ -1,0 +1,36 @@
+{
+  "format": "flowaction.block/v1",
+  "id": "script",
+  "version": "1.0.0",
+  "label": "Script",
+  "description": "Runs a script file committed under .flowaction/scripts/ with Python, Node or Bash.",
+  "bpmnType": "bpmn:ScriptTask",
+  "workflow": ".github/workflows/script.yml",
+  "inputs": [
+    {
+      "name": "language",
+      "type": "string",
+      "required": true,
+      "label": "Language",
+      "options": ["python", "javascript", "bash"]
+    },
+    {
+      "name": "script_path",
+      "type": "string",
+      "required": true,
+      "label": "Script",
+      "description": "File under .flowaction/scripts/<process key>/"
+    },
+    {
+      "name": "vars",
+      "type": "string",
+      "label": "Variables",
+      "description": "Compact JSON object of process variables"
+    },
+    {
+      "name": "timeout_minutes",
+      "type": "number",
+      "label": "Timeout (minutes)"
+    }
+  ]
+}
