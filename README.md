@@ -7,7 +7,7 @@ Each block is a `workflow_call` reusable workflow plus a `flowaction.block/v1` m
 ```yaml
 jobs:
   call_api:
-    uses: caprivm/flowaction-catalog/.github/workflows/http-request.yml@<commit sha> # catalog 1.0.0
+    uses: caprivm/flowaction-catalog/.github/workflows/http-request.yml@<commit sha> # v1.0.0
     with:
       task_id: call_api
       method: GET
@@ -33,7 +33,8 @@ Forms, human approvals, timers, gateways and subprocesses are not here: FlowActi
 | `.flowaction/blocks/<id>/block.json` | Block manifests (`flowaction.block/v1`)                        |
 | `schemas/block.v1.json`              | JSON Schema of the manifest, also for custom blocks            |
 | `scripts/validate.mjs`               | Checks every manifest against its workflow and the conventions |
-| `.github/workflows/ci.yml`           | Runs actionlint and the validator on every pull request        |
+| `scripts/next-version.mjs`           | Computes the next SemVer tag from Conventional Commits         |
+| `.github/workflows/ci.yml`           | Runs actionlint and the validator; tags releases from `main`   |
 
 ## Custom blocks
 
@@ -51,7 +52,24 @@ Customers add their own blocks to their execution repository with the same contr
 
 ## Versions
 
-Segments pin a commit SHA. Bump a block's `version` in its manifest whenever its inputs, secrets or outputs change, and tag releases (`v1.0.0`) so the pin can carry a readable comment.
+The catalog is versioned with SemVer tags (`v1.0.0`, `v1.1.0`, `v2.0.0`). FlowAction lists them so each block of a process can use its own catalog version, and the segment pins the tag's commit SHA with the tag as a comment:
+
+```yaml
+uses: caprivm/flowaction-catalog/.github/workflows/http-request.yml@<commit sha> # v1.1.0
+```
+
+Tags are created automatically. After every push to `main` that passes validation, the `release` job in `ci.yml` reads the Conventional Commits merged since the latest tag and publishes the next tag with a GitHub release and generated notes:
+
+| Commit since the last tag                                            | Next version     |
+| -------------------------------------------------------------------- | ---------------- |
+| `feat!:`, `fix!:` (any type with `!`) or a `BREAKING CHANGE:` footer | Major (`v2.0.0`) |
+| `feat:`                                                              | Minor (`v1.1.0`) |
+| `fix:`, `perf:`, `revert:`                                           | Patch (`v1.0.1`) |
+| `docs:`, `ci:`, `chore:`, `test:`, `refactor:`, `style:`, `build:`   | No release       |
+
+Only the subject line sets the type, so squash-merge pull requests with a Conventional Commit title. A change that removes or renames an input, secret or output of a block, or makes an input required, is breaking. The first run, with no tag yet, publishes `v1.0.0`. The logic lives in `scripts/next-version.mjs` and is tested by `scripts/next-version.test.mjs`.
+
+A block's manifest `version` is the version of that block's contract; bump it whenever its inputs, secrets or outputs change. The tag is the version of the whole catalog.
 
 ## Access
 

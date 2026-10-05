@@ -28,6 +28,9 @@ jobs:
       - name: Lint workflows
         run: '"$(go env GOPATH)/bin/actionlint"'
 
+      - name: Test the release script
+        run: node --test scripts/next-version.test.mjs
+
       - name: Validate block manifests and workflows
         env:
           WORKFLOW_JSON_DIR: ${{ runner.temp }}/workflow-json
@@ -37,3 +40,38 @@ jobs:
             yq -o=json "$file" > "$WORKFLOW_JSON_DIR/$(basename "$file").json"
           done
           node scripts/validate.mjs "$WORKFLOW_JSON_DIR"
+
+  # Every push to main that carries a feat, fix, perf, revert or breaking change gets the next
+  # SemVer tag and a GitHub release. FlowAction lists these tags so each block in a process can
+  # pin its own catalog version; the segment references the tag's commit SHA.
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Compute the next version
+        id: next
+        run: node scripts/next-version.mjs
+
+      - name: Tag and publish the release
+        if: steps.next.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+        run: gh release create "$VERSION" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
