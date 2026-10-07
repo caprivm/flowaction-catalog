@@ -27,14 +27,12 @@ Forms, human approvals, timers, gateways and subprocesses are not here: FlowActi
 
 ## Layout
 
-| Path                                 | Contents                                                       |
-| ------------------------------------ | -------------------------------------------------------------- |
-| `.github/workflows/<id>.yml`         | Block workflows (`workflow_call` only)                         |
-| `.flowaction/blocks/<id>/block.json` | Block manifests (`flowaction.block/v1`)                        |
-| `schemas/block.v1.json`              | JSON Schema of the manifest, also for custom blocks            |
-| `scripts/validate.mjs`               | Checks every manifest against its workflow and the conventions |
-| `scripts/next-version.mjs`           | Computes the next SemVer tag from Conventional Commits         |
-| `.github/workflows/ci.yml`           | Runs actionlint and the validator; tags releases from `main`   |
+| Path                                 | Contents                                                                                                  |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `.github/workflows/<id>.yml`         | Block workflows (`workflow_call` only)                                                                    |
+| `.flowaction/blocks/<id>/block.json` | Block manifests (`flowaction.block/v1`)                                                                   |
+| `schemas/block.v1.json`              | JSON Schema of the manifest, also for custom blocks                                                       |
+| `.github/workflows/ci.yml`           | Lints the workflows, validates every block and tags releases from `main` using only `bash`, `jq` and `yq` |
 
 ## Custom blocks
 
@@ -68,7 +66,7 @@ Tags are created automatically. After every push to `main` that passes validatio
 | `fix:`, `perf:`, `revert:`                                           | Patch (`v1.0.1`) |
 | `docs:`, `ci:`, `chore:`, `test:`, `refactor:`, `style:`, `build:`   | No release       |
 
-Only the subject line sets the type, so squash-merge pull requests with a Conventional Commit title. A change that removes or renames an input, secret or output of a block, or makes an input required, is breaking. The first run, with no tag yet, publishes `v1.0.0`. The logic lives in `scripts/next-version.mjs` and is tested by `scripts/next-version.test.mjs`.
+Only the subject line sets the type, so squash-merge pull requests with a Conventional Commit title. A change that removes or renames an input, secret or output of a block, or makes an input required, is breaking. The first run, with no tag yet, publishes `v1.0.0`. The logic is the `Compute the next version` step of `ci.yml`; on pull requests it runs as a dry run that prints the version and publishes nothing.
 
 A block's manifest `version` is the version of that block's contract; bump it whenever its inputs, secrets or outputs change. The tag is the version of the whole catalog.
 
