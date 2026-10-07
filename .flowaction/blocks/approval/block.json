@@ -1,0 +1,59 @@
+{
+  "format": "flowaction.block/v1",
+  "id": "approval",
+  "version": "1.0.0",
+  "label": "Human approval",
+  "description": "Waits in FlowAction, with no runner, until a person approves or rejects. Shows what happened and what each decision leads to.",
+  "bpmnType": "bpmn:UserTask",
+  "inputs": [
+    {
+      "name": "title",
+      "type": "string",
+      "label": "Title",
+      "description": "What the person decides; reads process variables with {{ name.path }}"
+    },
+    {
+      "name": "context",
+      "type": "string",
+      "label": "What happened",
+      "description": "Shown above the decision; reads process variables with {{ name.path }}"
+    },
+    {
+      "name": "on_approve",
+      "type": "string",
+      "label": "If approved",
+      "description": "What happens when the person approves"
+    },
+    {
+      "name": "on_reject",
+      "type": "string",
+      "label": "If rejected",
+      "description": "What happens when the person rejects"
+    },
+    {
+      "name": "approvers",
+      "type": "string",
+      "label": "Who can decide",
+      "description": "write: people with write access (default); maintain: only maintainers and admins",
+      "options": ["write", "maintain"]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "decision",
+      "description": "approved or rejected"
+    },
+    {
+      "name": "comment",
+      "description": "What the person wrote, or empty"
+    },
+    {
+      "name": "decided_by",
+      "description": "GitHub login of the person who decided"
+    },
+    {
+      "name": "decided_at",
+      "description": "When they decided, as an ISO 8601 date"
+    }
+  ]
+}

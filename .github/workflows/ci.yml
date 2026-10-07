@@ -48,8 +48,10 @@ jobs:
               (if (.id // "" | tostring | test("^[a-z][a-z0-9-]{1,40}\\z")) then empty else fail("invalid id") end),
               (if $path != ".flowaction/blocks/\(.id)/block.json" then fail("path must match the id") else empty end),
               (if (.version // "" | tostring | test("^\\d+\\.\\d+\\.\\d+\\z")) then empty else fail("version must be x.y.z") end),
-              (if .bpmnType | IN("bpmn:ServiceTask", "bpmn:ScriptTask", "bpmn:SendTask") then empty else fail("unsupported bpmnType") end),
-              (if (.workflow // "" | tostring | test("^\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml\\z")) then empty
+              (if .bpmnType | IN("bpmn:ServiceTask", "bpmn:ScriptTask", "bpmn:SendTask", "bpmn:UserTask") then empty else fail("unsupported bpmnType") end),
+              # A user task waits in FlowAction, so it has no workflow; every other block has one.
+              (if .bpmnType == "bpmn:UserTask" then (if has("workflow") then fail("a bpmn:UserTask block has no workflow") else empty end)
+               elif (.workflow // "" | tostring | test("^\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml\\z")) then empty
                else fail("workflow must be a file in .github/workflows") end),
               ((.inputs // []) as $inputs | range($inputs | length) as $i | $inputs[$i] as $input
                 | (if ($input.name | tostring | test("^[a-z][a-z0-9_]{0,63}\\z")) and ($input.name | IN("task_id", "runs_on") | not)
@@ -62,6 +64,9 @@ jobs:
                   (if any($outputs[:$i][]; .name == $output.name) then fail("duplicate output \($output.name)") else empty end))
             ' "$path")
             [ -z "$found" ] || mapfile -t -O "${#errors[@]}" errors <<< "$found"
+            if [ "$(jq -r .bpmnType "$path")" = bpmn:UserTask ]; then
+              continue
+            fi
             workflow=$(jq -r '.workflow // ""' "$path")
             used+=("$(basename "$workflow")")
             if [ ! -f "$workflow" ]; then

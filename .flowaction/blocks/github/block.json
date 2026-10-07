@@ -1,0 +1,86 @@
+{
+  "format": "flowaction.block/v1",
+  "id": "github",
+  "version": "1.0.0",
+  "label": "GitHub",
+  "description": "Runs one GitHub operation on issues: create, get, list, comment, edit labels or close. The result becomes the task output.",
+  "bpmnType": "bpmn:ServiceTask",
+  "workflow": ".github/workflows/github.yml",
+  "inputs": [
+    {
+      "name": "operation",
+      "type": "string",
+      "required": true,
+      "label": "Operation",
+      "options": [
+        "create-issue",
+        "get-issue",
+        "list-issues",
+        "comment-issue",
+        "edit-labels",
+        "close-issue"
+      ]
+    },
+    {
+      "name": "repository",
+      "type": "string",
+      "label": "Repository",
+      "description": "owner/name; the calling repository when empty"
+    },
+    {
+      "name": "issue",
+      "type": "number",
+      "label": "Issue number",
+      "description": "For every operation on one issue"
+    },
+    {
+      "name": "title",
+      "type": "string",
+      "label": "Title",
+      "description": "Issue title, for create-issue"
+    },
+    {
+      "name": "body",
+      "type": "string",
+      "label": "Body",
+      "description": "Markdown text of the issue or of the comment"
+    },
+    {
+      "name": "labels",
+      "type": "string",
+      "label": "Labels",
+      "description": "Comma-separated labels to set, add or filter by"
+    },
+    {
+      "name": "remove_labels",
+      "type": "string",
+      "label": "Labels to remove",
+      "description": "Comma-separated, for edit-labels"
+    },
+    {
+      "name": "state",
+      "type": "string",
+      "label": "State",
+      "description": "For list-issues",
+      "options": ["open", "closed", "all"]
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "label": "Limit",
+      "description": "Most issues list-issues returns, from 1 to 100"
+    }
+  ],
+  "secrets": [
+    {
+      "name": "github_token",
+      "description": "Token for operations that change something, such as the caller's GITHUB_TOKEN with issues: write or a GitHub App token"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "output",
+      "description": "The whole task output as compact JSON, empty when larger than 32 KiB"
+    }
+  ]
+}
