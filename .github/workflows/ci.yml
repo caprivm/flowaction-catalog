@@ -31,6 +31,7 @@ jobs:
       # yq, which ubuntu-latest already has.
       - name: Validate block manifests and workflows
         run: |
+          set -o pipefail
           shopt -s dotglob nullglob
           errors=()
           used=()
@@ -139,6 +140,7 @@ jobs:
       - name: Compute the next version
         id: next
         run: |
+          set -o pipefail
           tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           header_pattern='^([a-z]+)(\([^)]*\))?(!)?: [^[:space:]]'
           current=$(git tag --list 'v*' | { grep -E "$tag_pattern" || true; } | sort -V | tail -n 1)
