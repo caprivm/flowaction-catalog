@@ -22,8 +22,28 @@ jobs:
 | ------------------------------------------------------------ | ------------ | ------------------------------------ | ---------------------------------------------------------- |
 | [`http-request`](.flowaction/blocks/http-request/block.json) | Service task | `.github/workflows/http-request.yml` | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS` |
 | [`script`](.flowaction/blocks/script/block.json)             | Script task  | `.github/workflows/script.yml`       | Python, JavaScript (Node), Bash                            |
+| [`github`](.flowaction/blocks/github/block.json)             | Service task | `.github/workflows/github.yml`       | Issues: create, get, list, comment, edit labels, close     |
+| [`approval`](.flowaction/blocks/approval/block.json)         | User task    | None: FlowAction holds it            | Approve, reject                                            |
 
-Forms, human approvals, timers, gateways and subprocesses are not here: FlowAction holds or evaluates them, so they never occupy a runner.
+The `approval` manifest has no workflow: the instance waits in FlowAction, with no runner, until a person decides. Its inputs are the texts FlowAction shows (they read process variables with `{{ name.path }}`) and who may decide, set in the process definition's `blocks` under `with`; its outputs (`decision`, `comment`, `decided_by`, `decided_at`) become process variables under the task id, so an exclusive gateway after it can read `review.decision = "approved"`. Only the catalog defines blocks like this, because FlowAction implements their behavior. Forms, timers, gateways and subprocesses are not here either: FlowAction holds or evaluates them.
+
+The `github` block runs with this workflow's read-only token unless the caller maps a token as its `github_token` secret. To change issues, grant the calling job `issues: write` and map its own token:
+
+```yaml
+jobs:
+  publish:
+    permissions:
+      contents: read
+      issues: write
+    uses: caprivm/flowaction-catalog/.github/workflows/github.yml@<commit sha> # v1.2.0
+    with:
+      task_id: publish
+      operation: create-issue
+      title: Joke of the day
+      body: ${{ fromJSON(inputs.vars).joke.body.setup }}
+    secrets:
+      github_token: ${{ secrets.GITHUB_TOKEN }}
+```
 
 ## Layout
 
@@ -40,6 +60,7 @@ Customers add their own blocks to their execution repository with the same contr
 
 ## Rules for every block workflow
 
+- A block that waits in FlowAction (`bpmn:UserTask`) has no workflow, and none of the rules below apply to it. Every other block names its workflow.
 - Triggered only by `workflow_call`, with a required string input `task_id` and an optional `runs_on`; FlowAction fills both, so manifests do not list them.
 - Inputs and secrets match the manifest exactly (name, type and required flag).
 - `permissions: contents: read` and nothing more.

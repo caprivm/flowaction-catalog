@@ -2,18 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/caprivm/flowaction-catalog/blob/main/schemas/block.v1.json",
   "title": "FlowAction block manifest",
-  "description": "flowaction.block/v1: describes a block whose work runs in a workflow_call reusable workflow. Lives at .flowaction/blocks/<id>/block.json in the catalog or in an execution repository.",
+  "description": "flowaction.block/v1: describes a block whose work runs in a workflow_call reusable workflow, or a catalog block FlowAction holds itself (bpmn:UserTask, no workflow). Lives at .flowaction/blocks/<id>/block.json in the catalog or in an execution repository.",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "format",
-    "id",
-    "version",
-    "label",
-    "description",
-    "bpmnType",
-    "workflow"
-  ],
+  "required": ["format", "id", "version", "label", "description", "bpmnType"],
+  "if": {
+    "properties": { "bpmnType": { "const": "bpmn:UserTask" } }
+  },
+  "then": {
+    "not": { "required": ["workflow"] }
+  },
+  "else": {
+    "required": ["workflow"]
+  },
   "properties": {
     "$schema": { "type": "string" },
     "format": { "const": "flowaction.block/v1" },
@@ -22,7 +23,13 @@
     "label": { "type": "string", "minLength": 1, "maxLength": 80 },
     "description": { "type": "string", "minLength": 1, "maxLength": 500 },
     "bpmnType": {
-      "enum": ["bpmn:ServiceTask", "bpmn:ScriptTask", "bpmn:SendTask"]
+      "enum": [
+        "bpmn:ServiceTask",
+        "bpmn:ScriptTask",
+        "bpmn:SendTask",
+        "bpmn:UserTask"
+      ],
+      "description": "bpmn:UserTask blocks wait in FlowAction for a person and have no workflow; only the catalog defines them."
     },
     "workflow": {
       "type": "string",

@@ -1,0 +1,197 @@
+# FlowAction catalog block: GitHub (BPMN service task, GitHub connector).
+#
+# Reusable workflow called by FlowAction segments from this repository, pinned by commit SHA.
+# Its manifest is .flowaction/blocks/github/block.json. It runs one GitHub operation with the REST
+# API through `gh api` and stores the result as the task output, both as an artifact and as a job
+# output. Every caller-provided value reaches the shell through `env:`; none is interpolated into
+# a `run:` command.
+#
+# This workflow keeps `contents: read`, so its own token can only read. Operations that change
+# something need the caller to map a token as the `github_token` secret: the segment's own
+# `secrets.GITHUB_TOKEN`, granted `issues: write` in the calling job, or a GitHub App token.
+name: FlowAction catalog / GitHub
+
+on:
+  workflow_call:
+    inputs:
+      task_id:
+        description: BPMN task identifier; names the output file and artifact
+        required: true
+        type: string
+      operation:
+        description: create-issue, get-issue, list-issues, comment-issue, edit-labels or close-issue
+        required: true
+        type: string
+      repository:
+        description: owner/name of the repository; the calling repository when empty
+        required: false
+        type: string
+        default: ""
+      issue:
+        description: Issue number, for every operation on one issue
+        required: false
+        type: number
+        default: 0
+      title:
+        description: Issue title, for create-issue
+        required: false
+        type: string
+        default: ""
+      body:
+        description: Markdown text of the issue (create-issue) or of the comment (comment-issue, close-issue)
+        required: false
+        type: string
+        default: ""
+      labels:
+        description: Comma-separated labels to set (create-issue), add (edit-labels) or filter by (list-issues)
+        required: false
+        type: string
+        default: ""
+      remove_labels:
+        description: Comma-separated labels to remove, for edit-labels
+        required: false
+        type: string
+        default: ""
+      state:
+        description: open, closed or all, for list-issues
+        required: false
+        type: string
+        default: open
+      limit:
+        description: Most issues list-issues returns, from 1 to 100
+        required: false
+        type: number
+        default: 30
+      runs_on:
+        description: Runner label
+        required: false
+        type: string
+        default: ubuntu-latest
+    secrets:
+      github_token:
+        description: Token for the operation, such as the caller's GITHUB_TOKEN or a GitHub App token; this workflow's read-only token when not mapped
+        required: false
+    outputs:
+      output:
+        description: The whole task output as compact JSON, or empty when it is larger than 32 KiB
+        value: ${{ jobs.github.outputs.output }}
+
+permissions:
+  contents: read
+
+jobs:
+  github:
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 10
+    outputs:
+      output: ${{ steps.run.outputs.output }}
+    steps:
+      - name: Run the GitHub operation
+        id: run
+        env:
+          FLOWACTION_TASK_ID: ${{ inputs.task_id }}
+          FLOWACTION_OPERATION: ${{ inputs.operation }}
+          FLOWACTION_REPOSITORY: ${{ inputs.repository || github.repository }}
+          FLOWACTION_ISSUE: ${{ inputs.issue }}
+          FLOWACTION_TITLE: ${{ inputs.title }}
+          FLOWACTION_BODY: ${{ inputs.body }}
+          FLOWACTION_LABELS: ${{ inputs.labels }}
+          FLOWACTION_REMOVE_LABELS: ${{ inputs.remove_labels }}
+          FLOWACTION_STATE: ${{ inputs.state }}
+          FLOWACTION_LIMIT: ${{ inputs.limit }}
+          FLOWACTION_OUTPUT_DIR: ${{ runner.temp }}/flowaction-output
+          GH_TOKEN: ${{ secrets.github_token || github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$FLOWACTION_TASK_ID" =~ ^[A-Za-z0-9_-]{1,80}$ ]] || fail "Invalid task_id"
+          [[ "$FLOWACTION_REPOSITORY" =~ ^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$ ]] || fail "repository must be owner/name"
+          [[ "$FLOWACTION_ISSUE" =~ ^[0-9]{1,10}$ ]] || fail "issue must be a positive number"
+          if ! [[ "$FLOWACTION_LIMIT" =~ ^[0-9]{1,3}$ ]] || (( FLOWACTION_LIMIT < 1 || FLOWACTION_LIMIT > 100 )); then
+            fail "limit must be between 1 and 100"
+          fi
+          repo="repos/$FLOWACTION_REPOSITORY"
+          # A comma-separated list as a JSON array of trimmed, non-empty names.
+          names() { jq -cn --arg list "$1" '$list | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))'; }
+          need_issue() { (( FLOWACTION_ISSUE > 0 )) || fail "$FLOWACTION_OPERATION needs issue"; }
+          # The fields of an issue the task output keeps; long bodies are cut so outputs stay small.
+          issue_fields='{number, title, state, url: .html_url, author: .user.login, labels: [.labels[].name], body: ((.body // "") | .[:2000])}'
+
+          mkdir -p "$FLOWACTION_OUTPUT_DIR"
+          output="$FLOWACTION_OUTPUT_DIR/$FLOWACTION_TASK_ID.json"
+          case "$FLOWACTION_OPERATION" in
+            create-issue)
+              [ -n "$FLOWACTION_TITLE" ] || fail "create-issue needs a title"
+              jq -n --arg title "$FLOWACTION_TITLE" --arg body "$FLOWACTION_BODY" --argjson labels "$(names "$FLOWACTION_LABELS")" \
+                '{title: $title, body: $body, labels: $labels}' \
+                | gh api --method POST "$repo/issues" --input - \
+                | jq "$issue_fields" > "$output"
+              ;;
+            get-issue)
+              need_issue
+              gh api "$repo/issues/$FLOWACTION_ISSUE" | jq "$issue_fields" > "$output"
+              ;;
+            list-issues)
+              case "$FLOWACTION_STATE" in open | closed | all) ;; *) fail "state must be open, closed or all" ;; esac
+              # The issues endpoint also returns pull requests; they are left out.
+              query=(-f state="$FLOWACTION_STATE" -f per_page="$FLOWACTION_LIMIT")
+              filter=$(names "$FLOWACTION_LABELS" | jq -r 'join(",")')
+              [ -z "$filter" ] || query+=(-f labels="$filter")
+              gh api --method GET "$repo/issues" "${query[@]}" \
+                | jq "map(select(has(\"pull_request\") | not) | $issue_fields) | {count: length, issues: .}" > "$output"
+              ;;
+            comment-issue)
+              need_issue
+              [ -n "$FLOWACTION_BODY" ] || fail "comment-issue needs a body"
+              jq -n --arg body "$FLOWACTION_BODY" '{body: $body}' \
+                | gh api --method POST "$repo/issues/$FLOWACTION_ISSUE/comments" --input - \
+                | jq --argjson issue "$FLOWACTION_ISSUE" '{issue: $issue, url: .html_url}' > "$output"
+              ;;
+            edit-labels)
+              need_issue
+              add=$(names "$FLOWACTION_LABELS")
+              if [ "$add" != "[]" ]; then
+                jq -n --argjson labels "$add" '{labels: $labels}' \
+                  | gh api --method POST "$repo/issues/$FLOWACTION_ISSUE/labels" --input - > /dev/null
+              fi
+              current=$(gh api "$repo/issues/$FLOWACTION_ISSUE/labels" --jq '[.[].name]')
+              # Only labels the issue has are removed, so removing an absent label is not an error.
+              jq -r --argjson current "$current" '.[] | select(IN($current[])) | @uri' <<< "$(names "$FLOWACTION_REMOVE_LABELS")" \
+                | while IFS= read -r label; do
+                    gh api --method DELETE "$repo/issues/$FLOWACTION_ISSUE/labels/$label" > /dev/null
+                  done
+              gh api "$repo/issues/$FLOWACTION_ISSUE/labels" \
+                | jq --argjson issue "$FLOWACTION_ISSUE" '{issue: $issue, labels: [.[].name]}' > "$output"
+              ;;
+            close-issue)
+              need_issue
+              if [ -n "$FLOWACTION_BODY" ]; then
+                jq -n --arg body "$FLOWACTION_BODY" '{body: $body}' \
+                  | gh api --method POST "$repo/issues/$FLOWACTION_ISSUE/comments" --input - > /dev/null
+              fi
+              jq -n '{state: "closed", state_reason: "completed"}' \
+                | gh api --method PATCH "$repo/issues/$FLOWACTION_ISSUE" --input - \
+                | jq "$issue_fields" > "$output"
+              ;;
+            *)
+              fail "Unsupported operation $FLOWACTION_OPERATION"
+              ;;
+          esac
+
+          jq -e 'type == "object"' "$output" > /dev/null || fail "The operation did not return a JSON object"
+          # The output is also a job output, so a task of the same segment can read it without
+          # downloading the artifact. Job outputs are small, so a larger output is left out.
+          if (( $(wc -c < "$output") <= 32768 )); then
+            printf 'output=%s\n' "$(jq -c . "$output")" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The output is larger than 32 KiB; read it from the artifact"
+          fi
+
+      - name: Upload task output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flowaction-output-${{ inputs.task_id }}
+          path: ${{ runner.temp }}/flowaction-output/
+          if-no-files-found: error
+          retention-days: 1
