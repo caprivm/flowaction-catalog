@@ -17,40 +17,108 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-
       # Go modules are verified against the Go checksum database, so the version pins the content.
       - name: Install actionlint
         run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
+      # actionlint also runs shellcheck, preinstalled on ubuntu-latest, on every run: script in this file.
       - name: Lint workflows
         run: '"$(go env GOPATH)/bin/actionlint"'
 
-      - name: Test the release script
-        run: node --test scripts/next-version.test.mjs
-
+      # Checks every flowaction.block/v1 manifest, the workflow it names and the security
+      # conventions every block workflow follows. FlowAction applies the same manifest rules
+      # (src/server/catalog/block-manifest.ts) to catalog and custom blocks. Uses only bash, jq and
+      # yq, which ubuntu-latest already has.
       - name: Validate block manifests and workflows
-        env:
-          WORKFLOW_JSON_DIR: ${{ runner.temp }}/workflow-json
         run: |
-          mkdir -p "$WORKFLOW_JSON_DIR"
-          for file in .github/workflows/*.yml; do
-            yq -o=json "$file" > "$WORKFLOW_JSON_DIR/$(basename "$file").json"
+          shopt -s dotglob nullglob
+          errors=()
+          used=()
+          manifests=(.flowaction/blocks/*)
+          for entry in "${manifests[@]}"; do
+            path="$entry/block.json"
+            if ! jq -se 'length == 1' "$path" > /dev/null 2>&1; then
+              errors+=("$path: not valid JSON")
+              continue
+            fi
+            found=$(jq -r --arg path "$path" '
+              def fail($message): "\($path): \($message)";
+              (if .format != "flowaction.block/v1" then fail("format must be flowaction.block/v1") else empty end),
+              (if (.id // "" | tostring | test("^[a-z][a-z0-9-]{1,40}\\z")) then empty else fail("invalid id") end),
+              (if $path != ".flowaction/blocks/\(.id)/block.json" then fail("path must match the id") else empty end),
+              (if (.version // "" | tostring | test("^\\d+\\.\\d+\\.\\d+\\z")) then empty else fail("version must be x.y.z") end),
+              (if .bpmnType | IN("bpmn:ServiceTask", "bpmn:ScriptTask", "bpmn:SendTask") then empty else fail("unsupported bpmnType") end),
+              (if (.workflow // "" | tostring | test("^\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml\\z")) then empty
+               else fail("workflow must be a file in .github/workflows") end),
+              ((.inputs // []) as $inputs | range($inputs | length) as $i | $inputs[$i] as $input
+                | (if ($input.name | tostring | test("^[a-z][a-z0-9_]{0,63}\\z")) and ($input.name | IN("task_id", "runs_on") | not)
+                   then empty else fail("invalid input \($input.name)") end),
+                  (if any($inputs[:$i][]; .name == $input.name) then fail("duplicate input \($input.name)") else empty end),
+                  (if $input.type | IN("string", "number", "boolean") then empty else fail("input \($input.name) has an invalid type") end),
+                  (if $input.options and $input.type != "string" then fail("only string inputs can list options") else empty end))
+            ' "$path")
+            [ -z "$found" ] || mapfile -t -O "${#errors[@]}" errors <<< "$found"
+            workflow=$(jq -r '.workflow // ""' "$path")
+            used+=("$(basename "$workflow")")
+            if [ ! -f "$workflow" ]; then
+              errors+=("$path: workflow $workflow does not exist")
+              continue
+            fi
+            found=$(yq -o=json "$workflow" | jq -r --arg file "$workflow" --rawfile source "$workflow" --slurpfile manifest "$path" '
+              def fail($message): "\($file): \($message)";
+              $manifest[0] as $manifest
+              | if (.on | type) != "object" or (.on | keys_unsorted) != ["workflow_call"] then fail("must be triggered only by workflow_call")
+                else
+                  (.on.workflow_call.inputs // {}) as $inputs
+                  | (.on.workflow_call.secrets // {}) as $secrets
+                  | ($manifest.inputs // [] | map({key: .name, value: .}) | from_entries) as $declared
+                  | ($manifest.secrets // [] | map(.name)) as $manifestSecrets
+                  | (if $inputs.task_id.type == "string" and $inputs.task_id.required == true then empty
+                     else fail("must declare a required string input task_id") end),
+                    ($declared | to_entries[] | .key as $name | .value as $input | $inputs[$name] as $actual
+                      | if $actual == null then fail("input \($name) is missing")
+                        elif $actual.type != $input.type then fail("input \($name) is \($actual.type), manifest says \($input.type)")
+                        elif ($actual.required == true) != ($input.required == true) then fail("input \($name) has a different required flag than the manifest")
+                        else empty end),
+                    ($inputs | keys_unsorted[] | select(IN("task_id", "runs_on") | not) | select(in($declared) | not)
+                      | fail("input \(.) is not in the manifest")),
+                    ($secrets | keys_unsorted[] | select(IN($manifestSecrets[]) | not) | fail("secret \(.) is not in the manifest")),
+                    ($manifestSecrets[] | select(in($secrets) | not) | fail("secret \(.) is missing")),
+                    (if .permissions != {contents: "read"} then fail("permissions must be exactly contents: read") else empty end),
+                    (.jobs // {} | to_entries[] | .key as $job | .value
+                      | (if has("permissions") then fail("job \($job) must not change permissions") else empty end),
+                        ((.steps // [])[]
+                        | (if (.run // "" | tostring | contains("$" + "{{")) then fail("job \($job) interpolates an expression into run:") else empty end),
+                          (.uses // empty | tostring | . as $uses
+                            | if test("^[\\w.-]+/[\\w./-]+@[0-9a-f]{40}\\z") | not then fail("\(.) is not pinned by SHA")
+                              elif $source | contains("\($uses) # v") | not then fail("\($uses) needs a # vX.Y.Z comment")
+                              else empty end)))
+                end
+            ')
+            [ -z "$found" ] || mapfile -t -O "${#errors[@]}" errors <<< "$found"
           done
-          node scripts/validate.mjs "$WORKFLOW_JSON_DIR"
+          for file in .github/workflows/*; do
+            name=$(basename "$file")
+            if [ "$name" != ci.yml ] && [[ " ${used[*]} " != *" $name "* ]]; then
+              errors+=("$file: has no block manifest")
+            fi
+          done
+          if [ "${#errors[@]}" -gt 0 ]; then
+            printf '::error::%s\n' "${errors[@]}"
+            exit 1
+          fi
+          echo "Validated ${#manifests[@]} blocks."
 
   # Every push to main that carries a feat, fix, perf, revert or breaking change gets the next
   # SemVer tag and a GitHub release. FlowAction lists these tags so each block in a process can
-  # pin its own catalog version; the segment references the tag's commit SHA.
+  # pin its own catalog version; the segment references the tag's commit SHA. Pull requests run
+  # the version step as a dry run and publish nothing.
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
-      group: release
+      group: release-${{ github.ref }}
       cancel-in-progress: false
     permissions:
       contents: write
@@ -61,17 +129,51 @@ jobs:
           fetch-tags: true
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-
+      # The next version comes from the Conventional Commits since the highest vX.Y.Z tag:
+      # - A `!` after the type (`feat!:`) or a `BREAKING CHANGE:` footer bumps the major version.
+      # - `feat` bumps the minor version.
+      # - `fix`, `perf` and `revert` bump the patch version.
+      # - Anything else (`docs`, `ci`, `chore`, `test`, `refactor`, `style`, `build`) makes no release.
+      # Only the subject line sets the type. With no tag yet, the first release is v1.0.0: the
+      # catalog's blocks were already published as 1.0.0 before tags existed.
       - name: Compute the next version
         id: next
-        run: node scripts/next-version.mjs
+        run: |
+          tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          header_pattern='^([a-z]+)(\([^)]*\))?(!)?: [^[:space:]]'
+          current=$(git tag --list 'v*' | { grep -E "$tag_pattern" || true; } | sort -V | tail -n 1)
+          version=v1.0.0
+          if [ -n "$current" ]; then
+            bump=0 # 0 none, 1 patch, 2 minor, 3 major
+            git log -z --format=%B "$current..HEAD" > "$RUNNER_TEMP/commit-messages"
+            while IFS= read -r -d '' message; do
+              message=${message#"${message%%[![:space:]]*}"}
+              subject=${message%%$'\n'*}
+              this=0
+              if [[ $subject =~ $header_pattern ]]; then
+                case ${BASH_REMATCH[1]} in
+                  feat) this=2 ;;
+                  fix | perf | revert) this=1 ;;
+                esac
+                if [ -n "${BASH_REMATCH[3]}" ]; then this=3; fi
+              fi
+              if grep -qE '^BREAKING[ -]CHANGE: ' <<< "$message"; then this=3; fi
+              if [ "$this" -gt "$bump" ]; then bump=$this; fi
+            done < "$RUNNER_TEMP/commit-messages"
+            IFS=. read -r major minor patch <<< "${current#v}"
+            case $bump in
+              3) version="v$((major + 1)).0.0" ;;
+              2) version="v$major.$((minor + 1)).0" ;;
+              1) version="v$major.$minor.$((patch + 1))" ;;
+              *) version="" ;;
+            esac
+          fi
+          echo "Next version: ${version:-none}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Tag and publish the release
-        if: steps.next.outputs.version != ''
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.next.outputs.version != ''
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.next.outputs.version }}
-        run: gh release create "$VERSION" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
+        run: gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
