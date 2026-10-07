@@ -1,7 +1,7 @@
 {
   "format": "flowaction.block/v1",
   "id": "http-request",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "label": "HTTP request (REST)",
   "description": "Calls an https:// endpoint; the response status, headers and body become the task output.",
   "bpmnType": "bpmn:ServiceTask",
@@ -27,7 +27,11 @@
       "label": "Headers",
       "description": "JSON object of header names to string values"
     },
-    { "name": "body", "type": "string", "label": "Body" },
+    {
+      "name": "body",
+      "type": "string",
+      "label": "Body"
+    },
     {
       "name": "auth_header",
       "type": "string",
@@ -58,5 +62,14 @@
       "description": "Credential, mapped from a GitHub secret name"
     }
   ],
-  "outputs": [{ "name": "status", "description": "HTTP response status code" }]
+  "outputs": [
+    {
+      "name": "status",
+      "description": "HTTP response status code"
+    },
+    {
+      "name": "output",
+      "description": "The whole task output as compact JSON, empty when larger than 32 KiB"
+    }
+  ]
 }

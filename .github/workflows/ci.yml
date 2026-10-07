@@ -56,7 +56,10 @@ jobs:
                    then empty else fail("invalid input \($input.name)") end),
                   (if any($inputs[:$i][]; .name == $input.name) then fail("duplicate input \($input.name)") else empty end),
                   (if $input.type | IN("string", "number", "boolean") then empty else fail("input \($input.name) has an invalid type") end),
-                  (if $input.options and $input.type != "string" then fail("only string inputs can list options") else empty end))
+                  (if $input.options and $input.type != "string" then fail("only string inputs can list options") else empty end)),
+              ((.outputs // []) as $outputs | range($outputs | length) as $i | $outputs[$i] as $output
+                | (if ($output.name | tostring | test("^[a-z][a-z0-9_]{0,63}\\z")) then empty else fail("invalid output \($output.name)") end),
+                  (if any($outputs[:$i][]; .name == $output.name) then fail("duplicate output \($output.name)") else empty end))
             ' "$path")
             [ -z "$found" ] || mapfile -t -O "${#errors[@]}" errors <<< "$found"
             workflow=$(jq -r '.workflow // ""' "$path")
@@ -74,6 +77,8 @@ jobs:
                   | (.on.workflow_call.secrets // {}) as $secrets
                   | ($manifest.inputs // [] | map({key: .name, value: .}) | from_entries) as $declared
                   | ($manifest.secrets // [] | map(.name)) as $manifestSecrets
+                  | (.on.workflow_call.outputs // {}) as $outputs
+                  | ($manifest.outputs // [] | map(.name)) as $manifestOutputs
                   | (if $inputs.task_id.type == "string" and $inputs.task_id.required == true then empty
                      else fail("must declare a required string input task_id") end),
                     ($declared | to_entries[] | .key as $name | .value as $input | $inputs[$name] as $actual
@@ -85,6 +90,8 @@ jobs:
                       | fail("input \(.) is not in the manifest")),
                     ($secrets | keys_unsorted[] | select(IN($manifestSecrets[]) | not) | fail("secret \(.) is not in the manifest")),
                     ($manifestSecrets[] | select(in($secrets) | not) | fail("secret \(.) is missing")),
+                    ($outputs | keys_unsorted[] | select(IN($manifestOutputs[]) | not) | fail("output \(.) is not in the manifest")),
+                    ($manifestOutputs[] | select(in($outputs) | not) | fail("output \(.) is missing")),
                     (if .permissions != {contents: "read"} then fail("permissions must be exactly contents: read") else empty end),
                     (.jobs // {} | to_entries[] | .key as $job | .value
                       | (if has("permissions") then fail("job \($job) must not change permissions") else empty end),

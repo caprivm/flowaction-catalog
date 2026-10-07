@@ -1,7 +1,7 @@
 {
   "format": "flowaction.block/v1",
   "id": "script",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "label": "Script",
   "description": "Runs a script file committed under .flowaction/scripts/ with Python, Node or Bash.",
   "bpmnType": "bpmn:ScriptTask",
@@ -31,6 +31,12 @@
       "name": "timeout_minutes",
       "type": "number",
       "label": "Timeout (minutes)"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "output",
+      "description": "The whole task output as compact JSON, empty when larger than 32 KiB"
     }
   ]
 }

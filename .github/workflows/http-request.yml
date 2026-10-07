@@ -2,7 +2,7 @@
 #
 # Reusable workflow called by FlowAction segments from this repository, pinned by commit SHA.
 # Its manifest is .flowaction/blocks/http-request/block.json. It sends one REST
-# request and stores the response as the task output. Every caller-provided value reaches the shell
+# request and stores the response as the task output, both as an artifact and as a job output. Every caller-provided value reaches the shell
 # through `env:`; none is interpolated into a `run:` command.
 name: FlowAction catalog / HTTP request
 
@@ -64,6 +64,9 @@ on:
       status:
         description: HTTP response status code
         value: ${{ jobs.request.outputs.status }}
+      output:
+        description: The whole task output as compact JSON, or empty when it is larger than 32 KiB
+        value: ${{ jobs.request.outputs.output }}
 
 permissions:
   contents: read
@@ -74,6 +77,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       status: ${{ steps.send.outputs.status }}
+      output: ${{ steps.send.outputs.output }}
     steps:
       - name: Send request
         id: send
@@ -162,6 +166,14 @@ jobs:
               body: (try ($body | fromjson) catch $body)
             }' > "$FLOWACTION_OUTPUT_DIR/$FLOWACTION_TASK_ID.json"
           echo "status=$status" >> "$GITHUB_OUTPUT"
+          # The output is also a job output, so a task of the same segment can read it without
+          # downloading the artifact. Job outputs are small, so a larger output is left out.
+          output_file="$FLOWACTION_OUTPUT_DIR/$FLOWACTION_TASK_ID.json"
+          if (( $(wc -c < "$output_file") <= 32768 )); then
+            printf 'output=%s\n' "$(jq -c . "$output_file")" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The output is larger than 32 KiB; read it from the artifact"
+          fi
           echo "HTTP $FLOWACTION_METHOD responded with status $status"
 
           if [[ "$FLOWACTION_FAIL_ON_HTTP_ERROR" == true ]] && (( status >= 400 )); then
