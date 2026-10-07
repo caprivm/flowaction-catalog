@@ -353,7 +353,7 @@ jobs:
               ;;
             edit-files)
               need_ref
-              [ -n "$FLOWACTION_PATH" ] && [[ "$FLOWACTION_PATH" =~ ^[A-Za-z0-9._/*?-]+$ && "$FLOWACTION_PATH" != *..* && "$FLOWACTION_PATH" != /* ]] \
+              [[ -n "$FLOWACTION_PATH" && "$FLOWACTION_PATH" =~ ^[A-Za-z0-9._/*?-]+$ && "$FLOWACTION_PATH" != *..* && "$FLOWACTION_PATH" != /* ]] \
                 || fail "path must be a relative glob of letters, digits and . _ / * ? -"
               [ -n "$FLOWACTION_FIND" ] || fail "edit-files needs find"
               [ -n "$FLOWACTION_MESSAGE" ] || fail "edit-files needs a commit message"
