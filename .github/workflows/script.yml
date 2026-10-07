@@ -36,6 +36,10 @@ on:
         required: false
         type: string
         default: ubuntu-latest
+    outputs:
+      output:
+        description: The whole task output as compact JSON, or empty when it is larger than 32 KiB
+        value: ${{ jobs.script.outputs.output }}
 
 permissions:
   contents: read
@@ -44,6 +48,8 @@ jobs:
   script:
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      output: ${{ steps.run.outputs.output }}
     steps:
       - name: Validate inputs
         env:
@@ -74,6 +80,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Run script
+        id: run
         env:
           FLOWACTION_TASK_ID: ${{ inputs.task_id }}
           FLOWACTION_LANGUAGE: ${{ inputs.language }}
@@ -96,6 +103,13 @@ jobs:
           esac
           jq -e 'type == "object"' "$FLOWACTION_OUTPUT" >/dev/null \
             || { echo "::error::The script must write a JSON object to FLOWACTION_OUTPUT"; exit 1; }
+          # The output is also a job output, so a task of the same segment can read it without
+          # downloading the artifact. Job outputs are small, so a larger output is left out.
+          if (( $(wc -c < "$FLOWACTION_OUTPUT") <= 32768 )); then
+            printf 'output=%s\n' "$(jq -c . "$FLOWACTION_OUTPUT")" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The output is larger than 32 KiB; read it from the artifact"
+          fi
 
       - name: Upload task output
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

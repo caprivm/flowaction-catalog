@@ -41,6 +41,13 @@ function checkManifest(path, manifest) {
   ) {
     fail(where, "workflow must be a file in .github/workflows");
   }
+  const outputNames = new Set();
+  for (const output of manifest.outputs ?? []) {
+    if (!NAME.test(output.name ?? "")) fail(where, `invalid output ${output.name}`);
+    if (outputNames.has(output.name))
+      fail(where, `duplicate output ${output.name}`);
+    outputNames.add(output.name);
+  }
   const names = new Set();
   for (const input of manifest.inputs ?? []) {
     if (!NAME.test(input.name) || RESERVED.includes(input.name))
@@ -88,6 +95,15 @@ function checkWorkflow(manifest, file, source, workflow) {
   for (const name of Object.keys(inputs)) {
     if (!RESERVED.includes(name) && !declared.has(name))
       fail(where, `input ${name} is not in the manifest`);
+  }
+  const declaredOutputs = call.outputs ?? {};
+  for (const output of manifest.outputs ?? []) {
+    if (!(output.name in declaredOutputs))
+      fail(where, `output ${output.name} is missing`);
+  }
+  for (const name of Object.keys(declaredOutputs)) {
+    if (!(manifest.outputs ?? []).some((output) => output.name === name))
+      fail(where, `output ${name} is not in the manifest`);
   }
   const manifestSecrets = new Set(
     (manifest.secrets ?? []).map((secret) => secret.name),

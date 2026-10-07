@@ -48,7 +48,8 @@ Customers add their own blocks to their execution repository with the same contr
 - Caller values reach the shell only through `env:`; `${{ }}` never appears inside `run:`.
 - Credentials arrive only as `secrets:` mapped by the caller from a GitHub secret name.
 - Actions are pinned by commit SHA with a `# vX.Y.Z` comment.
-- The task output is a JSON object at `${{ runner.temp }}/flowaction-output/<task_id>.json`, uploaded as the `flowaction-output-<task_id>` artifact.
+- The task output is a JSON object at `${{ runner.temp }}/flowaction-output/<task_id>.json`, uploaded as the `flowaction-output-<task_id>` artifact, and also published as the `output` output of the workflow (compact JSON, left empty when it is larger than 32 KiB) so another task of the same segment can read it without downloading the artifact.
+- Every output the workflow declares is listed in the manifest, and the other way round.
 
 ## Versions
 
