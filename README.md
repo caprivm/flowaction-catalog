@@ -73,3 +73,9 @@ A block's manifest `version` is the version of that block's contract; bump it wh
 ## Access
 
 GitHub lets other repositories call these workflows only if they can reach this repository. While it is private, only repositories owned by `caprivm` can use it, after enabling Settings → Actions → General → Access → "Accessible from repositories owned by the user 'caprivm'". Customers in other accounts need this repository to be public.
+
+## Project policies
+
+- [License](LICENSE)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
