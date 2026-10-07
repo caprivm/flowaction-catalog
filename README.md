@@ -18,12 +18,12 @@ jobs:
 
 ## Blocks
 
-| Block                                                        | BPMN element | Workflow                             | Allowed actions                                            |
-| ------------------------------------------------------------ | ------------ | ------------------------------------ | ---------------------------------------------------------- |
+| Block | BPMN element | Workflow | Allowed actions |
+| --- | --- | --- | --- |
 | [`http-request`](.flowaction/blocks/http-request/block.json) | Service task | `.github/workflows/http-request.yml` | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS` |
-| [`script`](.flowaction/blocks/script/block.json)             | Script task  | `.github/workflows/script.yml`       | Python, JavaScript (Node), Bash                            |
-| [`github`](.flowaction/blocks/github/block.json)             | Service task | `.github/workflows/github.yml`       | Issues: create, get, list, comment, edit labels, close     |
-| [`approval`](.flowaction/blocks/approval/block.json)         | User task    | None: FlowAction holds it            | Approve, reject                                            |
+| [`script`](.flowaction/blocks/script/block.json) | Script task | `.github/workflows/script.yml` | Python, JavaScript (Node), Bash |
+| [`github`](.flowaction/blocks/github/block.json) | Service task | `.github/workflows/github.yml` | Issues, pull requests, releases, file edits, workflow runs |
+| [`approval`](.flowaction/blocks/approval/block.json) | User task | None: FlowAction holds it | Approve, reject |
 
 The `approval` manifest has no workflow: the instance waits in FlowAction, with no runner, until a person decides. Its inputs are the texts FlowAction shows (they read process variables with `{{ name.path }}`) and who may decide, set in the process definition's `blocks` under `with`; its outputs (`decision`, `comment`, `decided_by`, `decided_at`) become process variables under the task id, so an exclusive gateway after it can read `review.decision = "approved"`. Only the catalog defines blocks like this, because FlowAction implements their behavior. Forms, timers, gateways and subprocesses are not here either: FlowAction holds or evaluates them.
 
@@ -45,14 +45,35 @@ jobs:
       github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+Its other operations work on pull requests (`create-pull-request`, `wait-checks`, `rerun-checks`, `merge-pull-request`, `close-pull-request`), releases (`latest-release`), files (`edit-files` replaces an extended regular expression in the files a glob matches and commits the result to a new branch; `revert-commit` reverts a commit on a new branch) and workflows (`run-workflow` dispatches one and waits for its run; `wait-workflow` waits for the run of a workflow on a commit). Waiting operations poll GitHub until the checks or the run end, or `timeout_minutes` passes, and report how they ended in the output (`conclusion`) instead of failing, so a gateway after the task decides what comes next. A new branch is never pushed over an existing one.
+
+GitHub does not let `GITHUB_TOKEN` change files in `.github/workflows/`, and what it merges starts no other workflow. For those operations, install a GitHub App on the repository and pass its client id as `app_client_id` and its private key as the `app_private_key` secret; the block creates a token for that repository only with `actions/create-github-app-token` and GitHub revokes it when the job ends:
+
+```yaml
+jobs:
+  pins:
+    uses: caprivm/flowaction-catalog/.github/workflows/github.yml@<commit sha> # v1.3.0
+    with:
+      task_id: pins
+      operation: edit-files
+      ref: flowaction/catalog-v1.3.0
+      path: .github/workflows/*.yml
+      find: "(caprivm/flowaction-catalog/[^@]+)@[0-9a-f]{40} # v[0-9.]+"
+      replace: '\1@<new commit sha> # v1.3.0'
+      message: "chore(deps): use catalog v1.3.0"
+      app_client_id: ${{ vars.DEMO_APP_CLIENT_ID }}
+    secrets:
+      app_private_key: ${{ secrets.DEMO_APP_PRIVATE_KEY }}
+```
+
 ## Layout
 
-| Path                                 | Contents                                                                                                  |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `.github/workflows/<id>.yml`         | Block workflows (`workflow_call` only)                                                                    |
-| `.flowaction/blocks/<id>/block.json` | Block manifests (`flowaction.block/v1`)                                                                   |
-| `schemas/block.v1.json`              | JSON Schema of the manifest, also for custom blocks                                                       |
-| `.github/workflows/ci.yml`           | Lints the workflows, validates every block and tags releases from `main` using only `bash`, `jq` and `yq` |
+| Path | Contents |
+| --- | --- |
+| `.github/workflows/<id>.yml` | Block workflows (`workflow_call` only) |
+| `.flowaction/blocks/<id>/block.json` | Block manifests (`flowaction.block/v1`) |
+| `schemas/block.v1.json` | JSON Schema of the manifest, also for custom blocks |
+| `.github/workflows/ci.yml` | Lints the workflows, validates every block and tags releases from `main` using only `bash`, `jq` and `yq` |
 
 ## Custom blocks
 
@@ -80,12 +101,12 @@ uses: caprivm/flowaction-catalog/.github/workflows/http-request.yml@<commit sha>
 
 Tags are created automatically. After every push to `main` that passes validation, the `release` job in `ci.yml` reads the Conventional Commits merged since the latest tag and publishes the next tag with a GitHub release and generated notes:
 
-| Commit since the last tag                                            | Next version     |
-| -------------------------------------------------------------------- | ---------------- |
+| Commit since the last tag | Next version |
+| --- | --- |
 | `feat!:`, `fix!:` (any type with `!`) or a `BREAKING CHANGE:` footer | Major (`v2.0.0`) |
-| `feat:`                                                              | Minor (`v1.1.0`) |
-| `fix:`, `perf:`, `revert:`                                           | Patch (`v1.0.1`) |
-| `docs:`, `ci:`, `chore:`, `test:`, `refactor:`, `style:`, `build:`   | No release       |
+| `feat:` | Minor (`v1.1.0`) |
+| `fix:`, `perf:`, `revert:` | Patch (`v1.0.1`) |
+| `docs:`, `ci:`, `chore:`, `test:`, `refactor:`, `style:`, `build:` | No release |
 
 Only the subject line sets the type, so squash-merge pull requests with a Conventional Commit title. A change that removes or renames an input, secret or output of a block, or makes an input required, is breaking. The first run, with no tag yet, publishes `v1.0.0`. The logic is the `Compute the next version` step of `ci.yml`; on pull requests it runs as a dry run that prints the version and publishes nothing.
 

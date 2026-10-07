@@ -1,9 +1,9 @@
 {
   "format": "flowaction.block/v1",
   "id": "github",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "label": "GitHub",
-  "description": "Runs one GitHub operation on issues: create, get, list, comment, edit labels or close. The result becomes the task output.",
+  "description": "Runs one GitHub operation: issues (create, get, list, comment, edit labels, close), pull requests (open, wait for checks, run failed checks again, merge, close), the latest release, editing files or reverting a commit on a new branch, and running or waiting for a workflow. The result becomes the task output.",
   "bpmnType": "bpmn:ServiceTask",
   "workflow": ".github/workflows/github.yml",
   "inputs": [
@@ -18,7 +18,17 @@
         "list-issues",
         "comment-issue",
         "edit-labels",
-        "close-issue"
+        "close-issue",
+        "latest-release",
+        "edit-files",
+        "revert-commit",
+        "create-pull-request",
+        "wait-checks",
+        "rerun-checks",
+        "merge-pull-request",
+        "close-pull-request",
+        "run-workflow",
+        "wait-workflow"
       ]
     },
     {
@@ -37,13 +47,13 @@
       "name": "title",
       "type": "string",
       "label": "Title",
-      "description": "Issue title, for create-issue"
+      "description": "Issue or pull request title, for create-issue and create-pull-request"
     },
     {
       "name": "body",
       "type": "string",
       "label": "Body",
-      "description": "Markdown text of the issue or of the comment"
+      "description": "Markdown text of the issue, comment or pull request"
     },
     {
       "name": "labels",
@@ -69,12 +79,95 @@
       "type": "number",
       "label": "Limit",
       "description": "Most issues list-issues returns, from 1 to 100"
+    },
+    {
+      "name": "ref",
+      "type": "string",
+      "label": "Branch",
+      "description": "Branch that edit-files and revert-commit create and create-pull-request opens from, or the ref run-workflow runs on"
+    },
+    {
+      "name": "base",
+      "type": "string",
+      "label": "Base branch",
+      "description": "Branch the new branch starts from and pull requests target; the default branch when empty"
+    },
+    {
+      "name": "path",
+      "type": "string",
+      "label": "Files",
+      "description": "Glob of the files edit-files changes, such as .github/workflows/*.yml"
+    },
+    {
+      "name": "find",
+      "type": "string",
+      "label": "Find",
+      "description": "Extended regular expression edit-files replaces"
+    },
+    {
+      "name": "replace",
+      "type": "string",
+      "label": "Replace with",
+      "description": "Replacement for find; \\1 to \\9 insert its groups"
+    },
+    {
+      "name": "message",
+      "type": "string",
+      "label": "Commit message",
+      "description": "For edit-files and revert-commit"
+    },
+    {
+      "name": "commit",
+      "type": "string",
+      "label": "Commit",
+      "description": "SHA that revert-commit reverts or wait-workflow waits for"
+    },
+    {
+      "name": "pull_request",
+      "type": "number",
+      "label": "Pull request number",
+      "description": "For the pull request operations"
+    },
+    {
+      "name": "merge_method",
+      "type": "string",
+      "label": "Merge method",
+      "description": "For merge-pull-request",
+      "options": ["squash", "merge", "rebase"]
+    },
+    {
+      "name": "workflow",
+      "type": "string",
+      "label": "Workflow",
+      "description": "Workflow file name, for run-workflow and wait-workflow"
+    },
+    {
+      "name": "workflow_inputs",
+      "type": "string",
+      "label": "Workflow inputs",
+      "description": "JSON object of strings run-workflow dispatches the workflow with"
+    },
+    {
+      "name": "timeout_minutes",
+      "type": "number",
+      "label": "Timeout (minutes)",
+      "description": "Longest a waiting operation waits, from 1 to 45"
+    },
+    {
+      "name": "app_client_id",
+      "type": "string",
+      "label": "GitHub App client id",
+      "description": "A GitHub App installed on the repository; its token is used when set"
     }
   ],
   "secrets": [
     {
       "name": "github_token",
-      "description": "Token for operations that change something, such as the caller's GITHUB_TOKEN with issues: write or a GitHub App token"
+      "description": "Token for operations that change something, such as the caller's GITHUB_TOKEN with issues: write"
+    },
+    {
+      "name": "app_private_key",
+      "description": "Private key of the GitHub App named by app_client_id"
     }
   ],
   "outputs": [

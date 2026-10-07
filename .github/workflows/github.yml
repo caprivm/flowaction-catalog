@@ -6,9 +6,17 @@
 # output. Every caller-provided value reaches the shell through `env:`; none is interpolated into
 # a `run:` command.
 #
+# Operations cover issues, pull requests (open, wait for their checks, run failed checks again,
+# merge, close), releases, editing files on a new branch, reverting a commit, and running or
+# waiting for a workflow. Waiting operations poll GitHub until the thing ends or `timeout_minutes`
+# passes, and report how it ended instead of failing, so a gateway after the task can decide.
+#
 # This workflow keeps `contents: read`, so its own token can only read. Operations that change
-# something need the caller to map a token as the `github_token` secret: the segment's own
-# `secrets.GITHUB_TOKEN`, granted `issues: write` in the calling job, or a GitHub App token.
+# something need a token from the caller: the segment's own `secrets.GITHUB_TOKEN` mapped as the
+# `github_token` secret (granted `issues: write` in the calling job), or a GitHub App, whose
+# client id goes in `app_client_id` and private key in the `app_private_key` secret. Editing
+# workflow files, and merges that start other workflows, need the GitHub App: GitHub does not let
+# GITHUB_TOKEN do either.
 name: FlowAction catalog / GitHub
 
 on:
@@ -19,7 +27,10 @@ on:
         required: true
         type: string
       operation:
-        description: create-issue, get-issue, list-issues, comment-issue, edit-labels or close-issue
+        description: >-
+          create-issue, get-issue, list-issues, comment-issue, edit-labels, close-issue, latest-release,
+          edit-files, revert-commit, create-pull-request, wait-checks, rerun-checks, merge-pull-request,
+          close-pull-request, run-workflow or wait-workflow
         required: true
         type: string
       repository:
@@ -62,6 +73,73 @@ on:
         required: false
         type: number
         default: 30
+      ref:
+        description: >-
+          Branch that edit-files and revert-commit create and create-pull-request opens from, or the
+          ref run-workflow runs on (the default branch when empty)
+        required: false
+        type: string
+        default: ""
+      base:
+        description: Branch that edit-files and revert-commit start from and pull requests target; the default branch when empty
+        required: false
+        type: string
+        default: ""
+      path:
+        description: Glob of the files edit-files changes, such as .github/workflows/*.yml
+        required: false
+        type: string
+        default: ""
+      find:
+        description: Extended regular expression edit-files replaces in every matching file
+        required: false
+        type: string
+        default: ""
+      replace:
+        description: Replacement for find; \1 to \9 insert its groups
+        required: false
+        type: string
+        default: ""
+      message:
+        description: Commit message for edit-files and revert-commit
+        required: false
+        type: string
+        default: ""
+      commit:
+        description: Commit SHA that revert-commit reverts or wait-workflow waits for
+        required: false
+        type: string
+        default: ""
+      pull_request:
+        description: Pull request number, for the pull request operations
+        required: false
+        type: number
+        default: 0
+      merge_method:
+        description: merge, squash or rebase, for merge-pull-request
+        required: false
+        type: string
+        default: squash
+      workflow:
+        description: Workflow file name, such as release.yml, for run-workflow and wait-workflow
+        required: false
+        type: string
+        default: ""
+      workflow_inputs:
+        description: JSON object of the inputs run-workflow dispatches the workflow with
+        required: false
+        type: string
+        default: "{}"
+      timeout_minutes:
+        description: Longest a waiting operation waits, from 1 to 45 minutes
+        required: false
+        type: number
+        default: 20
+      app_client_id:
+        description: Client id of a GitHub App installed on the repository; its token is used when set
+        required: false
+        type: string
+        default: ""
       runs_on:
         description: Runner label
         required: false
@@ -70,6 +148,9 @@ on:
     secrets:
       github_token:
         description: Token for the operation, such as the caller's GITHUB_TOKEN or a GitHub App token; this workflow's read-only token when not mapped
+        required: false
+      app_private_key:
+        description: Private key of the GitHub App named by app_client_id
         required: false
     outputs:
       output:
@@ -82,10 +163,30 @@ permissions:
 jobs:
   github:
     runs-on: ${{ inputs.runs_on }}
-    timeout-minutes: 10
+    timeout-minutes: 50
     outputs:
       output: ${{ steps.run.outputs.output }}
     steps:
+      - name: Read the target repository
+        id: target
+        env:
+          FLOWACTION_REPOSITORY: ${{ inputs.repository || github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$FLOWACTION_REPOSITORY" =~ ^([A-Za-z0-9_.-]{1,100})/([A-Za-z0-9_.-]{1,100})$ ]] || { echo "::error::repository must be owner/name"; exit 1; }
+          { echo "owner=${BASH_REMATCH[1]}"; echo "name=${BASH_REMATCH[2]}"; } >> "$GITHUB_OUTPUT"
+
+      # A GitHub App token for the target repository only, revoked when the job ends.
+      - name: Create a GitHub App token
+        id: app
+        if: inputs.app_client_id != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.app_client_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: ${{ steps.target.outputs.owner }}
+          repositories: ${{ steps.target.outputs.name }}
+
       - name: Run the GitHub operation
         id: run
         env:
@@ -99,8 +200,21 @@ jobs:
           FLOWACTION_REMOVE_LABELS: ${{ inputs.remove_labels }}
           FLOWACTION_STATE: ${{ inputs.state }}
           FLOWACTION_LIMIT: ${{ inputs.limit }}
+          FLOWACTION_REF: ${{ inputs.ref }}
+          FLOWACTION_BASE: ${{ inputs.base }}
+          FLOWACTION_PATH: ${{ inputs.path }}
+          FLOWACTION_FIND: ${{ inputs.find }}
+          FLOWACTION_REPLACE: ${{ inputs.replace }}
+          FLOWACTION_MESSAGE: ${{ inputs.message }}
+          FLOWACTION_COMMIT: ${{ inputs.commit }}
+          FLOWACTION_PULL_REQUEST: ${{ inputs.pull_request }}
+          FLOWACTION_MERGE_METHOD: ${{ inputs.merge_method }}
+          FLOWACTION_WORKFLOW: ${{ inputs.workflow }}
+          FLOWACTION_WORKFLOW_INPUTS: ${{ inputs.workflow_inputs }}
+          FLOWACTION_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           FLOWACTION_OUTPUT_DIR: ${{ runner.temp }}/flowaction-output
-          GH_TOKEN: ${{ secrets.github_token || github.token }}
+          FLOWACTION_WORKDIR: ${{ runner.temp }}/flowaction-repository
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.github_token || github.token }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -111,7 +225,64 @@ jobs:
           if ! [[ "$FLOWACTION_LIMIT" =~ ^[0-9]{1,3}$ ]] || (( FLOWACTION_LIMIT < 1 || FLOWACTION_LIMIT > 100 )); then
             fail "limit must be between 1 and 100"
           fi
+          [[ "$FLOWACTION_PULL_REQUEST" =~ ^[0-9]{1,10}$ ]] || fail "pull_request must be a positive number"
+          if ! [[ "$FLOWACTION_TIMEOUT_MINUTES" =~ ^[0-9]{1,2}$ ]] || (( FLOWACTION_TIMEOUT_MINUTES < 1 || FLOWACTION_TIMEOUT_MINUTES > 45 )); then
+            fail "timeout_minutes must be between 1 and 45"
+          fi
+          # Branch names: letters, digits and . _ / -, never starting with - or containing ..
+          branch_name() { [[ "$1" =~ ^[A-Za-z0-9._/-]{1,100}$ && "$1" != -* && "$1" != *..* ]]; }
+          [ -z "$FLOWACTION_REF" ] || branch_name "$FLOWACTION_REF" || fail "ref is not a valid branch or tag name"
+          [ -z "$FLOWACTION_BASE" ] || branch_name "$FLOWACTION_BASE" || fail "base is not a valid branch name"
+          [ -z "$FLOWACTION_COMMIT" ] || [[ "$FLOWACTION_COMMIT" =~ ^[0-9a-f]{7,40}$ ]] || fail "commit must be a commit SHA"
+          [ -z "$FLOWACTION_WORKFLOW" ] || [[ "$FLOWACTION_WORKFLOW" =~ ^[A-Za-z0-9_.-]{1,100}\.ya?ml$ ]] || fail "workflow must be a workflow file name"
           repo="repos/$FLOWACTION_REPOSITORY"
+          deadline=$(( $(date +%s) + FLOWACTION_TIMEOUT_MINUTES * 60 ))
+          need_pull_request() { (( FLOWACTION_PULL_REQUEST > 0 )) || fail "$FLOWACTION_OPERATION needs pull_request"; }
+          need_ref() { [ -n "$FLOWACTION_REF" ] || fail "$FLOWACTION_OPERATION needs ref"; }
+          default_branch() { gh api "$repo" --jq .default_branch; }
+          # Clones the base branch with the token in an HTTP header, never in a URL or on disk.
+          clone() {
+            auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+            git -c http.extraHeader="$auth" clone --quiet --depth "$2" --branch "$1" "https://github.com/$FLOWACTION_REPOSITORY.git" "$FLOWACTION_WORKDIR"
+            git -C "$FLOWACTION_WORKDIR" config user.name "FlowAction"
+            git -C "$FLOWACTION_WORKDIR" config user.email "flowaction@users.noreply.github.com"
+          }
+          # Pushes a new branch; an existing branch is never overwritten.
+          push_branch() { git -C "$FLOWACTION_WORKDIR" -c http.extraHeader="$auth" push --quiet origin "HEAD:refs/heads/$FLOWACTION_REF"; }
+          # How the checks of a commit ended, once none is still running: success when every check
+          # passed or was skipped, none when no check started before the deadline.
+          wait_checks() {
+            local sha=$1 runs
+            while :; do
+              runs=$(gh api "$repo/commits/$sha/check-runs?per_page=100" --jq '.check_runs')
+              if [ "$(jq 'length > 0 and all(.status == "completed")' <<< "$runs")" = true ]; then
+                jq --arg sha "$sha" '{
+                  sha: $sha, total: length,
+                  conclusion: (if all(.conclusion | IN("success", "skipped", "neutral")) then "success" else "failure" end),
+                  failed: [.[] | select(.conclusion | IN("success", "skipped", "neutral") | not)
+                    | {name, conclusion, url: .html_url, summary: ((.output.summary // "") | .[:500])}]}' <<< "$runs"
+                return
+              fi
+              if (( $(date +%s) >= deadline )); then
+                jq --arg sha "$sha" '{sha: $sha, total: length, conclusion: (if length == 0 then "none" else "timed_out" end),
+                  failed: [.[] | select(.status != "completed") | {name, conclusion: "timed_out", url: .html_url, summary: ""}]}' <<< "$runs"
+                return
+              fi
+              sleep 20
+            done
+          }
+          # How a workflow run ended, once it completed or the deadline passed.
+          wait_run() {
+            local run
+            while :; do
+              run=$(gh api "$repo/actions/runs/$1")
+              if [ "$(jq -r .status <<< "$run")" = completed ] || (( $(date +%s) >= deadline )); then
+                jq '{run_id: .id, url: .html_url, conclusion: (if .status == "completed" then .conclusion else "timed_out" end)}' <<< "$run"
+                return
+              fi
+              sleep 20
+            done
+          }
           # A comma-separated list as a JSON array of trimmed, non-empty names.
           names() { jq -cn --arg list "$1" '$list | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))'; }
           need_issue() { (( FLOWACTION_ISSUE > 0 )) || fail "$FLOWACTION_OPERATION needs issue"; }
@@ -173,6 +344,141 @@ jobs:
               jq -n '{state: "closed", state_reason: "completed"}' \
                 | gh api --method PATCH "$repo/issues/$FLOWACTION_ISSUE" --input - \
                 | jq "$issue_fields" > "$output"
+              ;;
+            latest-release)
+              release=$(gh api "$repo/releases/latest")
+              tag=$(jq -r .tag_name <<< "$release")
+              sha=$(gh api "$repo/commits/$tag" --jq .sha)
+              jq --arg sha "$sha" '{tag: .tag_name, sha: $sha, name, url: .html_url, notes: ((.body // "") | .[:4000])}' <<< "$release" > "$output"
+              ;;
+            edit-files)
+              need_ref
+              [ -n "$FLOWACTION_PATH" ] && [[ "$FLOWACTION_PATH" =~ ^[A-Za-z0-9._/*?-]+$ && "$FLOWACTION_PATH" != *..* && "$FLOWACTION_PATH" != /* ]] \
+                || fail "path must be a relative glob of letters, digits and . _ / * ? -"
+              [ -n "$FLOWACTION_FIND" ] || fail "edit-files needs find"
+              [ -n "$FLOWACTION_MESSAGE" ] || fail "edit-files needs a commit message"
+              # sed reads find and replace between \x01 delimiters, so neither may contain one.
+              d=$'\x01'
+              [[ "$FLOWACTION_FIND$FLOWACTION_REPLACE" != *"$d"* ]] || fail "find and replace cannot contain control character 0x01"
+              base=${FLOWACTION_BASE:-$(default_branch)}
+              clone "$base" 1
+              cd "$FLOWACTION_WORKDIR"
+              shopt -s globstar nullglob
+              # The glob was checked above, so it is expanded on purpose here.
+              # shellcheck disable=SC2206
+              files=($FLOWACTION_PATH)
+              for file in "${files[@]}"; do
+                if [ -f "$file" ]; then
+                  sed -E -i "s${d}${FLOWACTION_FIND}${d}${FLOWACTION_REPLACE}${d}g" -- "$file"
+                fi
+              done
+              changed=$(git diff --name-only | jq -Rsc 'split("\n") | map(select(length > 0))')
+              commit=""
+              diff=""
+              if [ "$changed" != "[]" ]; then
+                git commit --quiet --all --message "$FLOWACTION_MESSAGE"
+                push_branch
+                commit=$(git rev-parse HEAD)
+                # head stops reading early, so git may end with SIGPIPE.
+                diff=$(git show --format= HEAD | head -c 6000 || true)
+              fi
+              jq -n --arg branch "$FLOWACTION_REF" --arg base "$base" --arg commit "$commit" --arg diff "$diff" --argjson changed "$changed" \
+                '{branch: $branch, base: $base, commit: $commit, changed: $changed, changed_count: ($changed | length), diff: $diff}' > "$output"
+              ;;
+            revert-commit)
+              need_ref
+              [ -n "$FLOWACTION_COMMIT" ] || fail "revert-commit needs commit"
+              base=${FLOWACTION_BASE:-$(default_branch)}
+              clone "$base" 100
+              cd "$FLOWACTION_WORKDIR"
+              git revert --no-edit "$FLOWACTION_COMMIT" > /dev/null
+              [ -z "$FLOWACTION_MESSAGE" ] || git commit --quiet --amend --message "$FLOWACTION_MESSAGE"
+              push_branch
+              jq -n --arg branch "$FLOWACTION_REF" --arg base "$base" --arg commit "$(git rev-parse HEAD)" --arg reverted "$FLOWACTION_COMMIT" \
+                '{branch: $branch, base: $base, commit: $commit, reverted: $reverted}' > "$output"
+              ;;
+            create-pull-request)
+              need_ref
+              [ -n "$FLOWACTION_TITLE" ] || fail "create-pull-request needs a title"
+              base=${FLOWACTION_BASE:-$(default_branch)}
+              owner=${FLOWACTION_REPOSITORY%%/*}
+              fields='{number, url: .html_url, state, head: .head.ref, base: .base.ref, sha: .head.sha}'
+              # An open pull request from the same branch is reused, so running the task again is safe.
+              existing=$(gh api --method GET "$repo/pulls" -f state=open -f head="$owner:$FLOWACTION_REF" --jq '.[0] // empty')
+              if [ -n "$existing" ]; then
+                jq "$fields" <<< "$existing" > "$output"
+              else
+                jq -n --arg title "$FLOWACTION_TITLE" --arg body "$FLOWACTION_BODY" --arg head "$FLOWACTION_REF" --arg base "$base" \
+                  '{title: $title, body: $body, head: $head, base: $base}' \
+                  | gh api --method POST "$repo/pulls" --input - \
+                  | jq "$fields" > "$output"
+              fi
+              ;;
+            wait-checks)
+              need_pull_request
+              sha=$(gh api "$repo/pulls/$FLOWACTION_PULL_REQUEST" --jq .head.sha)
+              wait_checks "$sha" | jq --argjson number "$FLOWACTION_PULL_REQUEST" '{pull_request: $number} + .' > "$output"
+              ;;
+            rerun-checks)
+              need_pull_request
+              sha=$(gh api "$repo/pulls/$FLOWACTION_PULL_REQUEST" --jq .head.sha)
+              rerun=$(gh api --method GET "$repo/actions/runs" -f head_sha="$sha" -f per_page=100 \
+                --jq '[.workflow_runs[] | select(.conclusion | IN("failure", "timed_out", "cancelled")) | .id]')
+              for id in $(jq -r '.[]' <<< "$rerun"); do
+                gh api --method POST "$repo/actions/runs/$id/rerun-failed-jobs" > /dev/null
+              done
+              # Give GitHub time to queue the runs again before reading their checks.
+              sleep 30
+              wait_checks "$sha" | jq --argjson number "$FLOWACTION_PULL_REQUEST" --argjson rerun "$rerun" '{pull_request: $number, rerun: $rerun} + .' > "$output"
+              ;;
+            merge-pull-request)
+              need_pull_request
+              case "$FLOWACTION_MERGE_METHOD" in merge | squash | rebase) ;; *) fail "merge_method must be merge, squash or rebase" ;; esac
+              jq -n --arg method "$FLOWACTION_MERGE_METHOD" '{merge_method: $method}' \
+                | gh api --method PUT "$repo/pulls/$FLOWACTION_PULL_REQUEST/merge" --input - \
+                | jq --argjson number "$FLOWACTION_PULL_REQUEST" '{pull_request: $number, merged, sha}' > "$output"
+              ;;
+            close-pull-request)
+              need_pull_request
+              pull=$(gh api "$repo/pulls/$FLOWACTION_PULL_REQUEST")
+              if [ -n "$FLOWACTION_BODY" ]; then
+                jq -n --arg body "$FLOWACTION_BODY" '{body: $body}' \
+                  | gh api --method POST "$repo/issues/$FLOWACTION_PULL_REQUEST/comments" --input - > /dev/null
+              fi
+              jq -n '{state: "closed"}' | gh api --method PATCH "$repo/pulls/$FLOWACTION_PULL_REQUEST" --input - > /dev/null
+              # The branch is deleted only when it lives in this repository.
+              deleted=false
+              if [ "$(jq -r '.head.repo.full_name' <<< "$pull")" = "$FLOWACTION_REPOSITORY" ]; then
+                branch=$(jq -r '.head.ref | @uri' <<< "$pull")
+                if gh api --method DELETE "$repo/git/refs/heads/$branch" > /dev/null 2>&1; then deleted=true; fi
+              fi
+              jq --argjson deleted "$deleted" '{pull_request: .number, state: "closed", branch: .head.ref, branch_deleted: $deleted}' <<< "$pull" > "$output"
+              ;;
+            run-workflow)
+              [ -n "$FLOWACTION_WORKFLOW" ] || fail "run-workflow needs workflow"
+              jq -e 'type == "object" and all(.[]; type == "string")' <<< "$FLOWACTION_WORKFLOW_INPUTS" > /dev/null \
+                || fail "workflow_inputs must be a JSON object of strings"
+              ref=${FLOWACTION_REF:-$(default_branch)}
+              # GitHub answers with the id of the run it started when asked for run details.
+              run_id=$(jq -n --arg ref "$ref" --argjson inputs "$FLOWACTION_WORKFLOW_INPUTS" '{ref: $ref, inputs: $inputs, return_run_details: true}' \
+                | gh api --method POST "$repo/actions/workflows/$FLOWACTION_WORKFLOW/dispatches" --input - --jq '.workflow_run_id // empty')
+              [ -n "$run_id" ] || fail "GitHub did not return the id of the run it started"
+              wait_run "$run_id" | jq --arg workflow "$FLOWACTION_WORKFLOW" '{workflow: $workflow} + .' > "$output"
+              ;;
+            wait-workflow)
+              [ -n "$FLOWACTION_WORKFLOW" ] || fail "wait-workflow needs workflow"
+              [ -n "$FLOWACTION_COMMIT" ] || fail "wait-workflow needs commit"
+              run_id=""
+              while [ -z "$run_id" ] && (( $(date +%s) < deadline )); do
+                run_id=$(gh api --method GET "$repo/actions/workflows/$FLOWACTION_WORKFLOW/runs" -f head_sha="$FLOWACTION_COMMIT" -f per_page=1 \
+                  --jq '.workflow_runs[0].id // empty')
+                [ -n "$run_id" ] || sleep 20
+              done
+              if [ -z "$run_id" ]; then
+                jq -n --arg workflow "$FLOWACTION_WORKFLOW" '{workflow: $workflow, run_id: null, url: null, conclusion: "none"}' > "$output"
+              else
+                wait_run "$run_id" | jq --arg workflow "$FLOWACTION_WORKFLOW" '{workflow: $workflow} + .' > "$output"
+              fi
               ;;
             *)
               fail "Unsupported operation $FLOWACTION_OPERATION"
