@@ -13,7 +13,7 @@
 #
 # This workflow keeps `contents: read`, so its own token can only read. Operations that change
 # something need a token from the caller: the segment's own `secrets.GITHUB_TOKEN` mapped as the
-# `github_token` secret (granted `issues: write` in the calling job), or a GitHub App, whose
+# `token` secret (granted `issues: write` in the calling job), or a GitHub App, whose
 # client id goes in `app_client_id` and private key in the `app_private_key` secret. Editing
 # workflow files, and merges that start other workflows, need the GitHub App: GitHub does not let
 # GITHUB_TOKEN do either.
@@ -146,7 +146,7 @@ on:
         type: string
         default: ubuntu-latest
     secrets:
-      github_token:
+      token:
         description: Token for the operation, such as the caller's GITHUB_TOKEN or a GitHub App token; this workflow's read-only token when not mapped
         required: false
       app_private_key:
@@ -214,7 +214,7 @@ jobs:
           FLOWACTION_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           FLOWACTION_OUTPUT_DIR: ${{ runner.temp }}/flowaction-output
           FLOWACTION_WORKDIR: ${{ runner.temp }}/flowaction-repository
-          GH_TOKEN: ${{ steps.app.outputs.token || secrets.github_token || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.token || github.token }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }

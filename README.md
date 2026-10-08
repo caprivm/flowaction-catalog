@@ -27,7 +27,7 @@ jobs:
 
 The `approval` manifest has no workflow: the instance waits in FlowAction, with no runner, until a person decides. Its inputs are the texts FlowAction shows (they read process variables with `{{ name.path }}`) and who may decide, set in the process definition's `blocks` under `with`; its outputs (`decision`, `comment`, `decided_by`, `decided_at`) become process variables under the task id, so an exclusive gateway after it can read `review.decision = "approved"`. Only the catalog defines blocks like this, because FlowAction implements their behavior. Forms, timers, gateways and subprocesses are not here either: FlowAction holds or evaluates them.
 
-The `github` block runs with this workflow's read-only token unless the caller maps a token as its `github_token` secret. To change issues, grant the calling job `issues: write` and map its own token:
+The `github` block runs with this workflow's read-only token unless the caller maps a token as its `token` secret. To change issues, grant the calling job `issues: write` and map its own token:
 
 ```yaml
 jobs:
@@ -42,7 +42,7 @@ jobs:
       title: Joke of the day
       body: ${{ fromJSON(inputs.vars).joke.body.setup }}
     secrets:
-      github_token: ${{ secrets.GITHUB_TOKEN }}
+      token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 Its other operations work on pull requests (`create-pull-request`, `wait-checks`, `rerun-checks`, `merge-pull-request`, `close-pull-request`), releases (`latest-release`), files (`edit-files` replaces an extended regular expression in the files a glob matches and commits the result to a new branch; `revert-commit` reverts a commit on a new branch) and workflows (`run-workflow` dispatches one and waits for its run; `wait-workflow` waits for the run of a workflow on a commit). Waiting operations poll GitHub until the checks or the run end, or `timeout_minutes` passes, and report how they ended in the output (`conclusion`) instead of failing, so a gateway after the task decides what comes next. A new branch is never pushed over an existing one.
@@ -86,7 +86,7 @@ Customers add their own blocks to their execution repository with the same contr
 - Inputs and secrets match the manifest exactly (name, type and required flag).
 - `permissions: contents: read` and nothing more.
 - Caller values reach the shell only through `env:`; `${{ }}` never appears inside `run:`.
-- Credentials arrive only as `secrets:` mapped by the caller from a GitHub secret name.
+- Credentials arrive only as `secrets:` mapped by the caller from a GitHub secret name. A secret of the workflow cannot be named `github_*`: GitHub reserves those names and refuses to start any workflow that calls it.
 - Actions are pinned by commit SHA with a `# vX.Y.Z` comment.
 - The task output is a JSON object at `${{ runner.temp }}/flowaction-output/<task_id>.json`, uploaded as the `flowaction-output-<task_id>` artifact, and also published as the `output` output of the workflow (compact JSON, left empty when it is larger than 32 KiB) so another task of the same segment can read it without downloading the artifact.
 - Every output the workflow declares is listed in the manifest, and the other way round.

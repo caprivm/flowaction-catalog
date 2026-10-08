@@ -1,7 +1,7 @@
 {
   "format": "flowaction.block/v1",
   "id": "github",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "label": "GitHub",
   "description": "Runs one GitHub operation: issues (create, get, list, comment, edit labels, close), pull requests (open, wait for checks, run failed checks again, merge, close), the latest release, editing files or reverting a commit on a new branch, and running or waiting for a workflow. The result becomes the task output.",
   "bpmnType": "bpmn:ServiceTask",
@@ -162,7 +162,7 @@
   ],
   "secrets": [
     {
-      "name": "github_token",
+      "name": "token",
       "description": "Token for operations that change something, such as the caller's GITHUB_TOKEN with issues: write"
     },
     {
