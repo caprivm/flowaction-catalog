@@ -61,7 +61,10 @@ jobs:
                   (if $input.options and $input.type != "string" then fail("only string inputs can list options") else empty end)),
               ((.outputs // []) as $outputs | range($outputs | length) as $i | $outputs[$i] as $output
                 | (if ($output.name | tostring | test("^[a-z][a-z0-9_]{0,63}\\z")) then empty else fail("invalid output \($output.name)") end),
-                  (if any($outputs[:$i][]; .name == $output.name) then fail("duplicate output \($output.name)") else empty end))
+                  (if any($outputs[:$i][]; .name == $output.name) then fail("duplicate output \($output.name)") else empty end)),
+              # GitHub refuses to start a workflow that calls one declaring a secret named github_*.
+              ((.secrets // [])[] | .name | tostring
+                | if test("^[a-z][a-z0-9_]{0,63}\\z") and (test("^github_") | not) then empty else fail("invalid secret \(.)") end)
             ' "$path")
             [ -z "$found" ] || mapfile -t -O "${#errors[@]}" errors <<< "$found"
             if [ "$(jq -r .bpmnType "$path")" = bpmn:UserTask ]; then
