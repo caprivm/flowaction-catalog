@@ -247,8 +247,14 @@ jobs:
             git -C "$FLOWACTION_WORKDIR" config user.name "FlowAction"
             git -C "$FLOWACTION_WORKDIR" config user.email "flowaction@users.noreply.github.com"
           }
-          # Pushes a new branch; an existing branch is never overwritten.
-          push_branch() { git -C "$FLOWACTION_WORKDIR" -c http.extraHeader="$auth" push --quiet origin "HEAD:refs/heads/$FLOWACTION_REF"; }
+          # Pushes a new branch; an existing branch is never written to. A plain push would
+          # fast-forward a branch the new commit descends from, such as `ref` equal to `base`, so the
+          # lease with an empty expected value makes the push fail whenever the branch exists.
+          push_branch() {
+            git -C "$FLOWACTION_WORKDIR" -c http.extraHeader="$auth" push --quiet \
+              --force-with-lease="refs/heads/$FLOWACTION_REF:" origin "HEAD:refs/heads/$FLOWACTION_REF" \
+              || fail "Could not create branch $FLOWACTION_REF: it already exists or the push was refused"
+          }
           # How the checks of a commit ended, once none is still running: success when every check
           # passed or was skipped, none when no check started before the deadline.
           wait_checks() {
